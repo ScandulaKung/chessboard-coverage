@@ -1,0 +1,43 @@
+# Piece Texture Configuration File
+# =================================
+# This file allows you to specify custom texture paths for each piece.
+# 
+# Format: piece_name=texture_file_path
+# 
+# If a piece is not specified here, the program will use the default path:
+#   resources/piece_name.png
+#
+# Examples:
+#   3x3=custom_textures/my_3x3.png
+#   L-shape=resources/custom_L.png
+#   T-shape=C:/MyTextures/T_shape_custom.png
+#
+# Notes:
+# - Lines starting with # are comments and will be ignored
+# - Empty lines are also ignored
+# - Paths can be absolute or relative to the program directory
+# - If the specified texture file doesn't exist, the program will fall back
+#   to the default path (resources/piece_name.png)
+# - If the default path also doesn't exist, the program will create a default
+#   colored texture automatically
+#
+# Available piece names:
+#   3x3, 3x3L, 2x4, 2x3, L-shape, L-mirror, Z-mirror, line4, cross, T-shape,
+#   line3, 1x1-1, 1x1-2, line2, Z-shape, L3
+3x3=resources/sexy/3x3.png
+3x3L=resources/sexy/3x3L.png
+2x4=resources/sexy/2x4.png
+2x3=resources/sexy/2x3.png
+L-shape=resources/sexy/L-shape.png
+L-mirror=resources/sexy/L-mirror.png
+Z-mirror=resources/sexy/Z-mirror.png
+line4=resources/sexy/Line4.png
+cross=resources/sexy/Cross.png
+T-shape=resources/sexy/T-shape.png
+line3=resources/sexy/Line3.png
+1x1-1=resources/sexy/1x1.png
+line2=resources/sexy/Line2.png
+Z-shape=resources/sexy/Z-shape.png
+L3=resources/sexy/Small-L.png
+# 2x2.png
+
