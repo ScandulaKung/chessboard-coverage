@@ -51,16 +51,26 @@ struct PieceCount {
     int pieceId;
     int count;
     int currentShapeIndex;
+    int tempId;  // 临时唯一ID，用于区分同形状同角度的不同图块实例
 };
 
 vector<PieceCount> pieceCounts;  // 每种图块的数量
+int nextTempId = 1000;  // 下一个可用的临时ID（从1000开始，避免与pieceId冲突）
 bool showEditor = false;  // 是否显示编辑器
 int selectedPieceType = -1;  // 选中的图块类型（用于编辑器）
 int previewPieceType = -1;  // 预览的图块类型（用于编辑器示意图）
 
+// 键盘操作相关（未开启编辑器时）
+int previewSelectedIndex = -1;  // 预览区选中的图块索引（当编辑器未开启时）
+int keyboardPlaceRow = -1;  // 键盘操作时，准备放置图块的行位置
+int keyboardPlaceCol = -1;  // 键盘操作时，准备放置图块的列位置
+int keyboardPlacePieceId = -1;  // 键盘操作时，准备放置的图块ID
+int keyboardPlaceShapeIndex = -1;  // 键盘操作时，准备放置的图块形状索引
+
 // 拖拽相关
 struct DraggedPiece {
     int pieceId;
+    int tempId;  // 临时唯一ID，用于区分同形状同角度的不同图块实例
     int shapeIndex;
     int originalRow;
     int originalCol;
@@ -68,7 +78,7 @@ struct DraggedPiece {
     Vector2i dragOffset;
 };
 
-DraggedPiece draggedPiece = {-1, 0, -1, -1, false, {0, 0}};
+DraggedPiece draggedPiece = {-1, -1, 0, -1, -1, false, {0, 0}};
 bool isRotating = false;  // 是否正在旋转（鼠标右键按住时）
 
 // 编辑器拖拽相关
@@ -120,6 +130,10 @@ Color colors[] = {
     Color(255, 228, 196),   // 米色
     Color(176, 224, 230)    // 粉蓝
 };
+
+// 前向声明
+void assignTempIds();
+void clearOldTempIds();
 
 // 旋转图块形状（90度顺时针）
 vector<pair<int, int>> rotateShape(const vector<pair<int, int>>& shape) {
@@ -373,7 +387,46 @@ void initializePieces() {
             shapeIndex = 1;  // 90度
         }
         
-        pieceCounts.push_back({piece.id, count, shapeIndex});
+        pieceCounts.push_back({piece.id, count, shapeIndex, 0});  // tempId将在初始化时分配
+    }
+    
+    // 为所有pieceCounts分配临时唯一ID
+    assignTempIds();
+}
+
+// 为pieceCounts分配临时唯一ID
+void assignTempIds() {
+    for (auto& pc : pieceCounts) {
+        if (pc.count > 0) {
+            // 每个pieceCounts条目都分配一个唯一的tempId
+            // 即使同形状同角度，也分配不同的tempId
+            pc.tempId = nextTempId++;
+        } else {
+            pc.tempId = 0;  // count为0时，tempId为0
+        }
+    }
+}
+
+// 清理board上的旧临时ID（在编辑器确认更改时调用）
+void clearOldTempIds() {
+    // 收集所有旧的tempId
+    set<int> oldTempIds;
+    for (const auto& pc : pieceCounts) {
+        if (pc.tempId > 0) {
+            oldTempIds.insert(pc.tempId);
+        }
+    }
+    
+    // 清理board和solutionBoard上的旧tempId
+    for (int i = 0; i < BOARD_SIZE; i++) {
+        for (int j = 0; j < BOARD_SIZE; j++) {
+            if (oldTempIds.find(board[i][j]) != oldTempIds.end()) {
+                board[i][j] = 0;
+            }
+            if (oldTempIds.find(solutionBoard[i][j]) != oldTempIds.end()) {
+                solutionBoard[i][j] = 0;
+            }
+        }
     }
 }
 
@@ -429,7 +482,7 @@ float estimateSolveTime(const vector<PieceCount>& counts) {
         baseTime = max(baseTime, 30.0f);  // 至少30秒
     }
     
-    // 确保最小时间（对于测试用例1，增加时间以确保能找到解）
+    // 确保最小时间
     baseTime = max(baseTime, 60.0f);
     
     // 最大时间限制（避免过长）
@@ -438,37 +491,6 @@ float estimateSolveTime(const vector<PieceCount>& counts) {
     return baseTime;
 }
 
-// 设置测试用例：4个cross和16个1x1（总计：4×5 + 16×1 = 20 + 16 = 36格，正好填满6x6棋盘）
-void setTestCase1() {
-    pieceCounts.clear();
-    for (const auto& piece : pieces) {
-        int count = 0;
-        if (piece.name == "cross") count = 4;
-        else if (piece.name == "1x1-1") count = 16;
-        pieceCounts.push_back({piece.id, count, 0});
-    }
-}
-
-// 设置测试用例2：3个L-shape_0度，3个L-shape_180度，1个L-shape_90度，1个L-shape_270度，4个1x1
-// 总计：3×4 + 3×4 + 1×4 + 1×4 + 4×1 = 12 + 12 + 4 + 4 + 4 = 36格，正好填满6x6棋盘
-void setTestCase2() {
-    pieceCounts.clear();
-    for (const auto& piece : pieces) {
-        if (piece.name == "L-shape") {
-            // 为每个角度创建独立的条目
-            // 3个L-shape_0度（shapeIndex=0）
-            pieceCounts.push_back({piece.id, 3, 0});
-            // 3个L-shape_180度（shapeIndex=2）
-            pieceCounts.push_back({piece.id, 3, 2});
-            // 1个L-shape_90度（shapeIndex=1）
-            pieceCounts.push_back({piece.id, 1, 1});
-            // 1个L-shape_270度（shapeIndex=3）
-            pieceCounts.push_back({piece.id, 1, 3});
-        } else if (piece.name == "1x1-1") {
-            pieceCounts.push_back({piece.id, 4, 0});
-        }
-    }
-}
 
 // 检查图块是否可以放置在指定位置
 // 参数说明：
@@ -513,7 +535,7 @@ void placePiece(const vector<pair<int, int>>& shape, int row, int col, int id) {
     }
 }
 
-// 应用已知的解：4个cross和44个1x1的测试用例解
+// 应用已知的解（如果存在）
 
 // 从棋盘上移除图块
 // 参数说明：
@@ -559,51 +581,61 @@ vector<int> countPiecesOnBoard(const vector<vector<int>>& targetBoard, const vec
     vector<int> usedCounts(targetCounts.size(), 0);
     vector<vector<bool>> counted(BOARD_SIZE, vector<bool>(BOARD_SIZE, false));
     
-    for (int row = 0; row < BOARD_SIZE; row++) {
-        for (int col = 0; col < BOARD_SIZE; col++) {
+        for (int row = 0; row < BOARD_SIZE; row++) {
+            for (int col = 0; col < BOARD_SIZE; col++) {
             if (targetBoard[row][col] != 0 && !counted[row][col]) {
-                // 找到这个格子所属的图块ID
-                int pieceId = targetBoard[row][col];
+                // 找到这个格子所属的临时ID
+                int tempId = targetBoard[row][col];
                 
-                // 找到对应的图块定义
-                const Piece* piece = nullptr;
-                for (size_t i = 0; i < pieces.size(); i++) {
-                    if (pieces[i].id == pieceId) {
-                        piece = &pieces[i];
-                        break;
-                    }
-                }
-                
-                if (!piece) continue;
-                
-                // 找到这个图块的所有格子（通过DFS找到所有相邻的同ID格子）
-                vector<vector<bool>> visited(BOARD_SIZE, vector<bool>(BOARD_SIZE, false));
+                // 先通过DFS找到这个图块实例的所有单元格
+                    vector<vector<bool>> visited(BOARD_SIZE, vector<bool>(BOARD_SIZE, false));
                 set<pair<int, int>> instanceCells;
-                
-                // 使用DFS找到所有相连的格子
-                function<void(int, int)> dfs = [&](int r, int c) {
-                    if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) return;
-                    if (visited[r][c] || targetBoard[r][c] != pieceId) return;
                     
-                    visited[r][c] = true;
-                    counted[r][c] = true;  // 立即标记为已计数，避免重复计算
+                    function<void(int, int)> dfs = [&](int r, int c) {
+                        if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) return;
+                    if (visited[r][c] || targetBoard[r][c] != tempId) return;
+                        
+                        visited[r][c] = true;
                     instanceCells.insert({r, c});
+                        
+                        // 检查四个方向的相邻格子
+                        dfs(r - 1, c);
+                        dfs(r + 1, c);
+                        dfs(r, c - 1);
+                        dfs(r, c + 1);
+                    };
                     
-                    // 检查四个方向的相邻格子
-                    dfs(r - 1, c);
-                    dfs(r + 1, c);
-                    dfs(r, c - 1);
-                    dfs(r, c + 1);
-                };
-                
-                dfs(row, col);
-                
-                // 尝试匹配这个实例到某个shapeIndex
+                    dfs(row, col);
+                    
+                // 尝试匹配这个实例到某个pieceCounts条目
+                // 通过匹配shape来确定pieceId和currentShapeIndex
+                size_t matchedPcIndex = SIZE_MAX;
+                const Piece* matchedPiece = nullptr;
                 int matchedShapeIndex = -1;
                 
-                // 遍历所有可能的形状，找到匹配的shapeIndex
-                for (size_t s = 0; s < piece->shapes.size(); s++) {
-                    const auto& shape = piece->shapes[s];
+                // 遍历所有pieceCounts条目，尝试匹配
+                for (size_t pcIndex = 0; pcIndex < targetCounts.size(); pcIndex++) {
+                    const auto& pc = targetCounts[pcIndex];
+                    if (pc.count == 0) continue;
+                    
+                    // 找到对应的图块定义
+                    const Piece* piece = nullptr;
+                    for (size_t i = 0; i < pieces.size(); i++) {
+                        if (pieces[i].id == pc.pieceId) {
+                            piece = &pieces[i];
+                            break;
+                        }
+                    }
+                    
+                    if (!piece || piece->shapes.empty()) continue;
+                    
+                    // 尝试匹配到指定的shapeIndex
+                    int shapeIndex = pc.currentShapeIndex;
+                    if (shapeIndex < 0 || shapeIndex >= (int)piece->shapes.size()) {
+                        shapeIndex = 0;
+                    }
+                    
+                    const auto& shape = piece->shapes[shapeIndex];
                     if ((int)shape.size() != (int)instanceCells.size()) continue;
                     
                     // 尝试匹配
@@ -625,7 +657,7 @@ vector<int> countPiecesOnBoard(const vector<vector<int>>& targetBoard, const vec
                                     matches = false;
                                     break;
                                 }
-                                if (targetBoard[checkRow][checkCol] != pieceId) {
+                                if (targetBoard[checkRow][checkCol] != tempId) {
                                     matches = false;
                                     break;
                                 }
@@ -641,23 +673,31 @@ vector<int> countPiecesOnBoard(const vector<vector<int>>& targetBoard, const vec
                                     }
                                 }
                                 if (allMatch) {
-                                    matchedShapeIndex = s;
+                                    matchedPcIndex = pcIndex;
+                                    matchedPiece = piece;
+                                    matchedShapeIndex = shapeIndex;
                                     break;
                                 }
                             }
                         }
-                        if (matchedShapeIndex >= 0) break;
+                        if (matchedPcIndex != SIZE_MAX) break;
                     }
-                    if (matchedShapeIndex >= 0) break;
-                }
-                
-                // 如果找到了匹配的shapeIndex，找到对应的pieceCounts条目并计数
-                if (matchedShapeIndex >= 0) {
-                    for (size_t pcIndex = 0; pcIndex < targetCounts.size(); pcIndex++) {
-                        const auto& pc = targetCounts[pcIndex];
-                        if (pc.pieceId == pieceId && pc.currentShapeIndex == matchedShapeIndex) {
-                            usedCounts[pcIndex]++;
-                            break;
+                    if (matchedPcIndex != SIZE_MAX) break;
+                    }
+                    
+                // 如果找到了匹配的pieceCounts条目，计数并标记单元格
+                if (matchedPcIndex != SIZE_MAX && matchedPiece != nullptr && matchedShapeIndex >= 0) {
+                    const auto& pc = targetCounts[matchedPcIndex];
+                    // 检查匹配的shapeIndex是否与pieceCounts中指定的currentShapeIndex一致
+                    int expectedShapeIndex = pc.currentShapeIndex;
+                    if (expectedShapeIndex < 0 || expectedShapeIndex >= (int)matchedPiece->shapes.size()) {
+                        expectedShapeIndex = matchedShapeIndex;
+                    }
+                    if (matchedShapeIndex == expectedShapeIndex) {
+                        usedCounts[matchedPcIndex]++;
+                        // 只有在匹配成功后才标记所有单元格为已计数
+                        for (const auto& cell : instanceCells) {
+                            counted[cell.first][cell.second] = true;
                         }
                     }
                 }
@@ -889,8 +929,10 @@ void drawPieceEditor(RenderWindow& window, Font& font) {
     int rightCurrentY = rightAreaY;
     
     // 图块示意图（公用区域，在右侧顶部）
-    if (selectedPieceType >= 0 && selectedPieceType < (int)pieces.size() &&
-        previewPieceType >= 0 && previewPieceType < (int)pieces.size()) {
+    // 只要选中了图块就显示，不要求previewPieceType也设置
+    if (selectedPieceType >= 0 && selectedPieceType < (int)pieces.size()) {
+        // 确保previewPieceType与selectedPieceType同步
+        previewPieceType = selectedPieceType;
         int previewAreaX = rightAreaX;
         int previewAreaY = rightCurrentY;
         int previewAreaSize = EDITOR_PREVIEW_SIZE;  // 固定大小为 200x200
@@ -912,9 +954,17 @@ void drawPieceEditor(RenderWindow& window, Font& font) {
         
         // 计算图块尺寸，并在预览区域内居中显示
         const auto& previewPiece = pieces[previewPieceType];
+        // 找到对应的pieceCounts条目
+        int currentShapeIndex = 0;
+        for (const auto& pc : pieceCounts) {
+            if (pc.pieceId == previewPiece.id) {
+                currentShapeIndex = pc.currentShapeIndex;
+                break;
+            }
+        }
         if (!previewPiece.shapes.empty() && 
-            pieceCounts[previewPieceType].currentShapeIndex < (int)previewPiece.shapes.size()) {
-            const auto& shape = previewPiece.shapes[pieceCounts[previewPieceType].currentShapeIndex];
+            currentShapeIndex >= 0 && currentShapeIndex < (int)previewPiece.shapes.size()) {
+            const auto& shape = previewPiece.shapes[currentShapeIndex];
             
             // 计算图块的实际尺寸（宽度和高度）
             int minRow = shape[0].first, maxRow = shape[0].first;
@@ -943,7 +993,7 @@ void drawPieceEditor(RenderWindow& window, Font& font) {
             int offsetY = centerY - minRow * previewCellSize;
             
             // 绘制图块，在预览区域内居中显示
-            drawPieceShape(window, previewPiece, pieceCounts[previewPieceType].currentShapeIndex,
+            drawPieceShape(window, previewPiece, currentShapeIndex,
                           offsetX, offsetY, previewCellSize, true);
         }
         
@@ -1019,7 +1069,13 @@ void drawPieceEditor(RenderWindow& window, Font& font) {
             window.draw(leftAngleText);
             
             // 当前角度显示
-            int currentAngle = pieceCounts[previewPieceType].currentShapeIndex;
+            int currentAngle = 0;
+            for (const auto& pc : pieceCounts) {
+                if (pc.pieceId == previewPiece.id) {
+                    currentAngle = pc.currentShapeIndex;
+                    break;
+                }
+            }
             int maxAngle = (int)previewPiece.shapes.size() - 1;
             string angleStr = to_string(currentAngle) + "/" + to_string(maxAngle);
             Text angleDisplay(angleStr, font, 16);
@@ -1102,7 +1158,7 @@ void drawPiecePreviewArea(RenderWindow& window, Font& font) {
         
         // 找到对应的图块定义
         const Piece* piece = nullptr;
-        for (size_t i = 0; i < pieces.size(); i++) {
+    for (size_t i = 0; i < pieces.size(); i++) {
             if (pieces[i].id == pc.pieceId) {
                 piece = &pieces[i];
                 break;
@@ -1291,15 +1347,18 @@ vector<PieceInstance> getPlacedInstances(int pieceId) {
 }
 
 // 移除指定pieceId的超出数量的实例（从棋盘上移除多余的实例）
-void removeExcessInstances(int pieceId, int maxCount) {
+void removeExcessInstances(int pieceId, int maxCount) 
+{
     vector<PieceInstance> instances = getPlacedInstances(pieceId);
     
     if ((int)instances.size() <= maxCount) return;
     
     // 按位置排序，优先移除位置靠后的实例
     sort(instances.begin(), instances.end(),
-        [](const PieceInstance& a, const PieceInstance& b) {
-            if (a.baseRow != b.baseRow) {
+        [](const PieceInstance& a, const PieceInstance& b) 
+        {
+            if (a.baseRow != b.baseRow) 
+            {
                 return a.baseRow > b.baseRow;  // 行号大的先移除
             }
             return a.baseCol > b.baseCol;  // 列号大的先移除
@@ -1307,10 +1366,12 @@ void removeExcessInstances(int pieceId, int maxCount) {
     
     // 移除多余的实例
     int toRemove = (int)instances.size() - maxCount;
-    for (int i = 0; i < toRemove; i++) {
+    for (int i = 0; i < toRemove; i++) 
+    {
         const auto& instance = instances[i];
         // 移除这个实例的所有单元格
-        for (const auto& cell : instance.cells) {
+        for (const auto& cell : instance.cells) 
+        {
             board[cell.first][cell.second] = 0;
         }
     }
@@ -1348,19 +1409,18 @@ int countSmallIsolatedRegions() {
     return smallRegionCount;
 }
 
-bool solve(int pieceIndex, const vector<PieceCount>& counts) {
-    // 检查超时（每1000次递归调用检查一次，进一步减少检查频率以提高性能）
-    solveCheckCount++;
-    if (solveCheckCount % 1000 == 0) {
-        if (solveTimer.getElapsedTime().asSeconds() > estimatedSolveTime) {
-            solveTimeout = true;
-            return false;
+// 更新solutionBoard以实时显示求解过程（使用try_lock避免阻塞）
+void updateSolutionBoardDisplay() {
+    if (boardMutex.try_lock()) {
+        solutionBoard = board;
+        showSolution = true;
+        boardMutex.unlock();
         }
     }
     
-    if (solveTimeout) {
-        return false;
-    }
+bool solve(int pieceIndex, const vector<PieceCount>& counts, int& nextTempIdForSolve) {
+    // 限时检查已移除，允许无限时间求解
+    // nextTempIdForSolve: 用于为每个图块实例分配唯一的tempId
     
     // 快速计算已填充的单元格数（避免重复遍历）
     int filledCells = 0;
@@ -1377,6 +1437,15 @@ bool solve(int pieceIndex, const vector<PieceCount>& counts) {
             for (int j = 0; j < BOARD_SIZE; j++) {
                 bestBoard[i][j] = board[i][j];
             }
+        }
+        
+        // 实时更新solutionBoard，让主线程能够显示求解过程
+        // 为了避免频繁加锁影响性能，每10次更新才真正更新一次（或者每次更新都更新，因为bestBoard更新频率不高）
+        // 使用try_lock避免阻塞，如果无法获取锁就跳过这次更新
+        if (boardMutex.try_lock()) {
+            solutionBoard = bestBoard;
+            showSolution = true;  // 自动显示求解过程
+            boardMutex.unlock();
         }
     }
     
@@ -1399,10 +1468,29 @@ bool solve(int pieceIndex, const vector<PieceCount>& counts) {
     
     // 只有当游戏板填满且所有图块类型都使用了正确的数量时，才认为求解成功
     if (filledCells == BOARD_SIZE * BOARD_SIZE && allPiecesUsedCorrectly) {
+        // 确保bestBoard是最新的完整解（虽然上面已经更新过，但为了保险再更新一次）
+        if (filledCells > bestFilledCells) {
+            bestFilledCells = filledCells;
+            for (int i = 0; i < BOARD_SIZE; i++) {
+                for (int j = 0; j < BOARD_SIZE; j++) {
+                    bestBoard[i][j] = board[i][j];
+                }
+            }
+            
+            // 更新solutionBoard，显示完整解
+            if (boardMutex.try_lock()) {
+                solutionBoard = bestBoard;
+                showSolution = true;
+                boardMutex.unlock();
+            }
+        }
         return true;
     }
     
     // 剪枝优化：如果剩余空间不足以放置剩余图块，提前返回false
+    // 注意：这里使用filledCells（实际填充的单元格数）而不是placedCountsByIndex（识别的实例数）
+    // 因为countPiecesOnBoard可能无法正确识别所有实例（特别是当多个实例相邻时）
+    // 所以，我们使用更保守的剪枝策略：只有当剩余空间明显不足时才剪枝
     int emptyCells = BOARD_SIZE * BOARD_SIZE - filledCells;
     int requiredCells = 0;
     for (size_t pcIndex = 0; pcIndex < counts.size(); pcIndex++) {
@@ -1430,8 +1518,10 @@ bool solve(int pieceIndex, const vector<PieceCount>& counts) {
             }
         }
     }
-    if (requiredCells > emptyCells) {
-        return false;  // 剩余空间不足，剪枝
+    // 修改剪枝逻辑：只有当剩余空间明显不足时才剪枝（留一些余量，避免因计数错误而误剪）
+    // 如果requiredCells > emptyCells + 1，说明即使考虑计数误差，也不可能成功
+    if (requiredCells > emptyCells + 1) {
+        return false;  // 剩余空间明显不足，剪枝
     }
     
     // 创建一个图块列表，按大小和剩余数量排序（大的先放，剩余数量少的优先）
@@ -1513,8 +1603,6 @@ bool solve(int pieceIndex, const vector<PieceCount>& counts) {
         int pieceSize = (int)shape.size();
         
         // 只尝试指定的形状和位置（不再遍历所有角度）
-        if (solveTimeout) return false;
-            
             // 优化：对于大图块（如cross），限制搜索范围以提高效率
             int maxRow = BOARD_SIZE;
             int maxCol = BOARD_SIZE;
@@ -1529,15 +1617,15 @@ bool solve(int pieceIndex, const vector<PieceCount>& counts) {
                 maxCol = BOARD_SIZE - shapeMaxCol;
             }
             
-            // 优化：对于1x1图块，使用更高效的填充策略
+            // 优化：对于1x1图块，简化搜索逻辑（只要有空格就能放置）
             if (pieceSize == 1) {
-                // 1x1图块：直接按顺序填充空位，避免重复尝试
+                // 1x1图块：收集所有空位，按顺序尝试
                 int remaining1x1 = pc->count - placedCountsByIndex[pcIndex];
                 
                 // 收集所有空位
                 vector<pair<int, int>> emptyCells;
-                for (int row = 0; row < BOARD_SIZE; row++) {
-                    for (int col = 0; col < BOARD_SIZE; col++) {
+        for (int row = 0; row < BOARD_SIZE; row++) {
+            for (int col = 0; col < BOARD_SIZE; col++) {
                         if (board[row][col] == 0) {
                             emptyCells.push_back({row, col});
                         }
@@ -1549,146 +1637,188 @@ bool solve(int pieceIndex, const vector<PieceCount>& counts) {
                     return false;
                 }
                 
-                // 如果空位数量正好等于剩余1x1数量，直接全部填充（这是最优情况）
-                if ((int)emptyCells.size() == remaining1x1) {
+                // 按顺序尝试每个空位，每次只放置一个1x1，然后递归
+                // 这样可以避免组合爆炸，让递归自然地处理剩余图块
                     for (const auto& pos : emptyCells) {
-                        placePiece(shape, pos.first, pos.second, piece->id);
-                    }
-                    if (solve(pieceIndex + 1, counts)) {
+                    // 为每个实例分配唯一的tempId
+                    int instanceTempId = nextTempIdForSolve++;
+                    placePiece(shape, pos.first, pos.second, instanceTempId);
+                    updateSolutionBoardDisplay();  // 更新显示
+                    
+                    if (solve(pieceIndex + 1, counts, nextTempIdForSolve)) {
                         return true;
                     }
-                    // 恢复
-                    for (const auto& pos : emptyCells) {
-                        removePiece(shape, pos.first, pos.second);
-                    }
-                } else {
-                    // 改进：对于1x1图块，使用更高效的策略
-                    // 关键优化：如果剩余1x1数量很多，但空位也很多，使用组合搜索
-                    // 对于测试用例1（16个1x1），如果已经放置了4个cross，剩余16个空位正好等于16个1x1
-                    // 所以这种情况会在上面的"空位数量正好等于剩余1x1数量"分支处理
-                    // 但如果空位数量大于剩余1x1数量，需要选择哪些空位填充
                     
-                    // 如果剩余1x1数量较少（<=12），使用完整搜索
-                    if (remaining1x1 <= 12) {
-                        // 完整搜索：尝试所有空位
-                        for (const auto& pos : emptyCells) {
-                            if (solveTimeout) return false;
-                            placePiece(shape, pos.first, pos.second, piece->id);
-                            
-                            if (solve(pieceIndex + 1, counts)) {
-                                return true;
-                            }
-                            
-                            removePiece(shape, pos.first, pos.second);
-                        }
-                    } else {
-                        // 对于大量1x1，使用组合搜索但限制深度
-                        // 只尝试前N个位置，避免组合爆炸
-                        // 由于1x1图块可以放在任何空位，我们按顺序尝试，让后续递归处理
-                        int maxAttempts = min(40, (int)emptyCells.size());
-                        for (int i = 0; i < maxAttempts; i++) {
-                            if (solveTimeout) return false;
-                            const auto& pos = emptyCells[i];
-                            placePiece(shape, pos.first, pos.second, piece->id);
-                            
-                            if (solve(pieceIndex + 1, counts)) {
-                                return true;
-                            }
-                            
-                            removePiece(shape, pos.first, pos.second);
-                        }
+                        removePiece(shape, pos.first, pos.second);
+                    updateSolutionBoardDisplay();  // 更新显示（移除后）
                     }
-                }
-            } else {
+                
+                return false;  // 所有位置都尝试过了，没有找到解
+                } else {
                 // 大图块：从左上角开始，按行优先顺序尝试
                 // 优化：对于cross（5格），使用更智能的搜索策略
                 if (pieceSize == 5 && piece->name == "cross") {
-                    // Cross特殊优化：优先尝试特定模式的位置
-                    // 对于测试用例1（4个cross + 16个1x1），优先尝试形成特定模式的位置
-                    vector<tuple<int, int, int>> positions; // {score, row, col}
+                    // Cross特殊优化：快速收集所有可放置位置，然后按优先级尝试
+                    // 避免在收集位置时进行耗时的孤立区域计算
+                    vector<pair<int, int>> positions; // 所有可放置位置
+                    vector<pair<int, int>> priorityPositions; // 优先位置（特定模式）
+                    
+                    // 快速收集所有可放置位置（不进行耗时计算）
                     for (int row = 0; row < maxRow; row++) {
                         for (int col = 0; col < maxCol; col++) {
                             if (canPlace(shape, row, col)) {
-                                // 计算启发式分数
-                                int centerRow = BOARD_SIZE / 2;
-                                int centerCol = BOARD_SIZE / 2;
-                                int distFromCenter = abs(row - centerRow) + abs(col - centerCol);
-                                
-                                // 检查放置后是否会产生过小的孤立区域
-                                placePiece(shape, row, col, piece->id);
-                                int smallRegions = countSmallIsolatedRegions();
-                                removePiece(shape, row, col);
-                                
-                                // 对于测试用例1，优先尝试形成特定模式的位置
-                                // 模式：第1行和第4行全部是cross，第0/2/3/5行的位置1和4是cross
-                                // cross的中心在(row, col)，占据(row-1,col), (row,col-1), (row,col), (row,col+1), (row+1,col)
-                                int patternScore = 0;
+                                // 检查是否是优先位置（特定模式）
+                                bool isPriority = false;
                                 // 如果放在第1行（row=1），优先尝试
                                 if (row == 1) {
-                                    patternScore -= 1000;  // 大幅降低分数（提高优先级）
+                                    isPriority = true;
                                 }
                                 // 如果放在第4行（row=4），优先尝试
-                                if (row == 4) {
-                                    patternScore -= 1000;  // 大幅降低分数（提高优先级）
+                                else if (row == 4) {
+                                    isPriority = true;
                                 }
                                 // 如果放在第0行且col=1或4，优先尝试
-                                if (row == 0 && (col == 1 || col == 4)) {
-                                    patternScore -= 500;  // 降低分数（提高优先级）
+                                else if (row == 0 && (col == 1 || col == 4)) {
+                                    isPriority = true;
                                 }
                                 // 如果放在第2行且col=1或4，优先尝试
-                                if (row == 2 && (col == 1 || col == 4)) {
-                                    patternScore -= 500;  // 降低分数（提高优先级）
+                                else if (row == 2 && (col == 1 || col == 4)) {
+                                    isPriority = true;
                                 }
                                 // 如果放在第3行且col=1或4，优先尝试
-                                if (row == 3 && (col == 1 || col == 4)) {
-                                    patternScore -= 500;  // 降低分数（提高优先级）
+                                else if (row == 3 && (col == 1 || col == 4)) {
+                                    isPriority = true;
                                 }
                                 // 如果放在第5行且col=1或4，优先尝试
-                                if (row == 5 && (col == 1 || col == 4)) {
-                                    patternScore -= 500;  // 降低分数（提高优先级）
+                                else if (row == 5 && (col == 1 || col == 4)) {
+                                    isPriority = true;
                                 }
                                 
-                                // 分数：距离中心越近越好，孤立区域越少越好，模式匹配越好
-                                // 如果产生孤立小区域，大幅增加分数（降低优先级）
-                                int score = distFromCenter * 10 + smallRegions * 1000 + patternScore;
-                                positions.push_back({score, row, col});
+                                if (isPriority) {
+                                    priorityPositions.push_back({row, col});
+                                } else {
+                                    positions.push_back({row, col});
+                                }
                             }
                         }
                     }
-                    // 按分数排序（分数小的优先）
-                    sort(positions.begin(), positions.end());
-                    for (const auto& pos : positions) {
-                        if (solveTimeout) return false;
-                        int row = get<1>(pos);
-                        int col = get<2>(pos);
-                        placePiece(shape, row, col, piece->id);
+                    
+                    // 先尝试优先位置
+                    for (const auto& pos : priorityPositions) {
+                        // 为每个实例分配唯一的tempId
+                        int instanceTempId = nextTempIdForSolve++;
+                        placePiece(shape, pos.first, pos.second, instanceTempId);
+                        updateSolutionBoardDisplay();  // 更新显示
                         
-                        if (solve(pieceIndex + 1, counts)) {
+                        if (solve(pieceIndex + 1, counts, nextTempIdForSolve)) {
                             return true;
                         }
                         
-                        removePiece(shape, row, col);
+                        removePiece(shape, pos.first, pos.second);
+                        updateSolutionBoardDisplay();  // 更新显示（移除后）
                     }
+                    
+                    // 然后尝试其他位置
+                    for (const auto& pos : positions) {
+                        // 为每个实例分配唯一的tempId
+                        int instanceTempId = nextTempIdForSolve++;
+                        placePiece(shape, pos.first, pos.second, instanceTempId);
+                        updateSolutionBoardDisplay();  // 更新显示
+                        
+                        if (solve(pieceIndex + 1, counts, nextTempIdForSolve)) {
+                            return true;
+                        }
+                        
+                        removePiece(shape, pos.first, pos.second);
+                        updateSolutionBoardDisplay();  // 更新显示（移除后）
+                }
+            } else {
+                    // 其他大图块：正常搜索
+                    // 优化：对于3x3这样的正方形图块，使用更智能的搜索策略
+                    if (pieceSize == 9 && piece->name == "3x3") {
+                        // 3x3图块：优先尝试角落位置，然后尝试边缘位置，最后尝试中心位置
+                        vector<pair<int, int>> cornerPositions;  // 角落位置
+                        vector<pair<int, int>> edgePositions;   // 边缘位置
+                        vector<pair<int, int>> centerPositions; // 中心位置
+                        
+                    for (int row = 0; row < maxRow; row++) {
+                        for (int col = 0; col < maxCol; col++) {
+                if (canPlace(shape, row, col)) {
+                                    // 判断位置类型
+                                    bool isCorner = (row == 0 || row == maxRow - 1) && (col == 0 || col == maxCol - 1);
+                                    bool isEdge = (row == 0 || row == maxRow - 1) || (col == 0 || col == maxCol - 1);
+                                    
+                                    if (isCorner) {
+                                        cornerPositions.push_back({row, col});
+                                    } else if (isEdge) {
+                                        edgePositions.push_back({row, col});
+                                    } else {
+                                        centerPositions.push_back({row, col});
+                            }
+                        }
+                    }
+                        }
+                        
+                        // 先尝试角落位置
+                        for (const auto& pos : cornerPositions) {
+                            // 为每个实例分配唯一的tempId
+                            int instanceTempId = nextTempIdForSolve++;
+                            placePiece(shape, pos.first, pos.second, instanceTempId);
+                            updateSolutionBoardDisplay();  // 更新显示
+                            if (solve(pieceIndex + 1, counts, nextTempIdForSolve)) {
+                        return true;
+                    }
+                            removePiece(shape, pos.first, pos.second);
+                            updateSolutionBoardDisplay();  // 更新显示（移除后）
+                        }
+                        
+                        // 然后尝试边缘位置
+                        for (const auto& pos : edgePositions) {
+                            // 为每个实例分配唯一的tempId
+                            int instanceTempId = nextTempIdForSolve++;
+                            placePiece(shape, pos.first, pos.second, instanceTempId);
+                            updateSolutionBoardDisplay();  // 更新显示
+                            if (solve(pieceIndex + 1, counts, nextTempIdForSolve)) {
+                                return true;
+                            }
+                            removePiece(shape, pos.first, pos.second);
+                            updateSolutionBoardDisplay();  // 更新显示（移除后）
+                        }
+                        
+                        // 最后尝试中心位置
+                        for (const auto& pos : centerPositions) {
+                            // 为每个实例分配唯一的tempId
+                            int instanceTempId = nextTempIdForSolve++;
+                            placePiece(shape, pos.first, pos.second, instanceTempId);
+                            updateSolutionBoardDisplay();  // 更新显示
+                            if (solve(pieceIndex + 1, counts, nextTempIdForSolve)) {
+                                return true;
+                            }
+                            removePiece(shape, pos.first, pos.second);
+                            updateSolutionBoardDisplay();  // 更新显示（移除后）
+                }
                 } else {
                     // 其他大图块：正常搜索
                     for (int row = 0; row < maxRow; row++) {
-                        if (solveTimeout) return false;
                         for (int col = 0; col < maxCol; col++) {
-                            if (solveTimeout) return false;
-                            
                             if (canPlace(shape, row, col)) {
-                                placePiece(shape, row, col, piece->id);
+                                // 为每个实例分配唯一的tempId
+                                int instanceTempId = nextTempIdForSolve++;
+                                placePiece(shape, row, col, instanceTempId);
+                                updateSolutionBoardDisplay();  // 更新显示
                                 
-                                if (solve(pieceIndex + 1, counts)) {
+                                if (solve(pieceIndex + 1, counts, nextTempIdForSolve)) {
                                     return true;
                                 }
                                 
                                 removePiece(shape, row, col);
+                                updateSolutionBoardDisplay();  // 更新显示（移除后）
                             }
                         }
                     }
                 }
             }
+        }
         // 继续尝试其他图块类型
     }
     
@@ -1733,15 +1863,25 @@ void drawBoard(RenderWindow& window, Font& font) {
     const vector<vector<int>>* currentBoard = showSolution ? &solutionBoard : &board;
     
     // 先计算应该绘制的图块数量（使用与calculateUsedPieceCounts相同的逻辑）
-    // 注意：当showSolution=false时（用户手动编辑），不限制绘制数量，显示所有图块
+    // 注意：当showSolution=false时（用户手动编辑），需要正确计数已放置的图块
     vector<int> shouldDrawCounts;
     if (showSolution) {
         // 自动求解结果：只绘制符合pieceCounts限制的图块
         shouldDrawCounts = countPiecesOnBoard(*currentBoard, pieceCounts);
     } else {
-        // 用户手动编辑：不限制数量，允许绘制所有图块
-        // 设置一个很大的值，确保所有图块都能被绘制
-        shouldDrawCounts.assign(pieceCounts.size(), 10000);
+        // 用户手动编辑：需要正确计数已放置的图块，然后显示所有已放置的图块
+        // 使用countPiecesOnBoard来正确计数，确保计数逻辑与自动求解一致
+        shouldDrawCounts = countPiecesOnBoard(*currentBoard, pieceCounts);
+        // 但是，为了确保所有已放置的图块都能被绘制，我们需要设置一个足够大的值
+        // 或者直接使用计数结果，因为countPiecesOnBoard会返回实际已放置的数量
+        // 这里我们使用计数结果，但确保至少能绘制所有已放置的图块
+        for (size_t i = 0; i < shouldDrawCounts.size(); i++) {
+            // 确保至少能绘制已放置的图块数量
+            if (shouldDrawCounts[i] < pieceCounts[i].count) {
+                // 如果已放置的数量小于配置的数量，使用配置的数量（允许继续放置）
+                shouldDrawCounts[i] = pieceCounts[i].count;
+            }
+        }
     }
     
     // 计算已绘制的图块数量（按pieceCounts索引）
@@ -1755,22 +1895,242 @@ void drawBoard(RenderWindow& window, Font& font) {
     for (int i = 0; i < BOARD_SIZE; i++) {
         for (int j = 0; j < BOARD_SIZE; j++) {
             int cellValue = (*currentBoard)[i][j];
-            if (cellValue != 0 && !drawn[i][j] && !matchedInThisFrame[i][j]) {
+            if (cellValue != 0 && !drawn[i][j] && !matchedInThisFrame[i][j]) 
+            {
                 const Piece* piece = nullptr;
                 int shapeIndex = -1;
                 int baseRow = -1, baseCol = -1;
                 
-                // 找到对应的图块类型
-                for (const auto& p : pieces) {
-                    if (p.id == cellValue) {
+                // 当showSolution为true时，solutionBoard中的tempId是从10000开始的，无法匹配pieceCounts中的tempId
+                // 所以需要通过匹配shape来识别图块，而不是通过tempId
+                int pieceId = -1;
+                if (showSolution) {
+                    // 对于求解结果，通过匹配shape来识别图块（与countPiecesOnBoard相同的逻辑）
+                    // 先通过DFS找到这个图块实例的所有单元格
+                    int tempId = cellValue;
+                    vector<vector<bool>> visited(BOARD_SIZE, vector<bool>(BOARD_SIZE, false));
+                    set<pair<int, int>> instanceCells;
+                    
+                    function<void(int, int)> dfs = [&](int r, int c) {
+                        if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE) return;
+                        if (visited[r][c] || (*currentBoard)[r][c] != tempId) return;
+                        
+                        visited[r][c] = true;
+                        instanceCells.insert({r, c});
+                        
+                        dfs(r - 1, c);
+                        dfs(r + 1, c);
+                        dfs(r, c - 1);
+                        dfs(r, c + 1);
+                    };
+                    
+                    dfs(i, j);
+                    
+                    // 尝试匹配这个实例到某个pieceCounts条目
+                    for (size_t pcIndex = 0; pcIndex < pieceCounts.size(); pcIndex++) {
+                        const auto& pc = pieceCounts[pcIndex];
+                        if (pc.count == 0) continue;
+                        
+                        const Piece* candidatePiece = nullptr;
+                        for (size_t idx = 0; idx < pieces.size(); idx++) {
+                            if (pieces[idx].id == pc.pieceId) {
+                                candidatePiece = &pieces[idx];
+                                break;
+                            }
+                        }
+                        
+                        if (!candidatePiece || candidatePiece->shapes.empty()) continue;
+                        
+                        // 尝试匹配到指定的shapeIndex
+                        int testShapeIndex = pc.currentShapeIndex;
+                        if (testShapeIndex < 0 || testShapeIndex >= (int)candidatePiece->shapes.size()) {
+                            testShapeIndex = 0;
+                        }
+                        
+                        const auto& shape = candidatePiece->shapes[testShapeIndex];
+                        if ((int)shape.size() != (int)instanceCells.size()) continue;
+                        
+                        // 尝试匹配
+                        bool matched = false;
+                        for (const auto& startCell : instanceCells) {
+                            for (const auto& cellPos : shape) {
+                                int startRow = startCell.first - cellPos.first;
+                                int startCol = startCell.second - cellPos.second;
+                                
+                                if (startRow < 0 || startCol < 0) continue;
+                                
+                                set<pair<int, int>> shapeCells;
+                                bool matches = true;
+                                
+                                for (const auto& pos : shape) {
+                                    int checkRow = startRow + pos.first;
+                                    int checkCol = startCol + pos.second;
+                                    if (checkRow < 0 || checkRow >= BOARD_SIZE ||
+                                        checkCol < 0 || checkCol >= BOARD_SIZE) {
+                                        matches = false;
+                                        break;
+                                    }
+                                    if ((*currentBoard)[checkRow][checkCol] != tempId) {
+                                        matches = false;
+                                        break;
+                                    }
+                                    shapeCells.insert({checkRow, checkCol});
+                                }
+                                
+                                if (matches && shapeCells.size() == instanceCells.size()) {
+                                    bool allMatch = true;
+                                    for (const auto& cell : instanceCells) {
+                                        if (shapeCells.find(cell) == shapeCells.end()) {
+                                            allMatch = false;
+                                            break;
+                                        }
+                                    }
+                                    if (allMatch) {
+                                        pieceId = pc.pieceId;
+                                        piece = candidatePiece;
+                                        shapeIndex = testShapeIndex;
+                                        baseRow = startRow;
+                                        baseCol = startCol;
+                                        matched = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (matched) break;
+                        }
+                        if (matched) break;
+                    }
+                } else {
+                    // 对于用户手动编辑，通过tempId查找
+                    // 首先尝试通过pieceCounts中的tempId查找
+                    for (const auto& pc : pieceCounts) 
+                    {
+                        if (pc.tempId == cellValue) 
+                        {
+                            pieceId = pc.pieceId;
+                            break;
+                        }
+                    }
+                    
+                    // 如果通过pieceCounts找不到，尝试通过board上的值直接识别
+                    // 这可以处理从预览区拖出的图块（它们的tempId可能不在pieceCounts中）
+                    // 但是，需要确保不会匹配到错误的图块类型（特别是当多个图块相邻时）
+                    // 重要：优先匹配较大的图块，避免将大图块的一部分误识别为小图块
+                    if (pieceId < 0) 
+                    {
+                        // 按图块大小排序，优先匹配较大的图块
+                        vector<pair<const Piece*, size_t>> piecesWithSizes;
+                        for (const auto& p : pieces) 
+                        {
+                            if (!p.shapes.empty()) 
+                            {
+                                // 使用第一个形状的大小作为图块大小
+                                size_t pieceSize = p.shapes[0].size();
+                                piecesWithSizes.push_back({&p, pieceSize});
+                            }
+                        }
+                        // 按大小降序排序
+                        sort(piecesWithSizes.begin(), piecesWithSizes.end(),
+                            [](const pair<const Piece*, size_t>& a, const pair<const Piece*, size_t>& b) {
+                                return a.second > b.second;
+                            });
+                        
+                        // 遍历所有图块类型（按大小排序），尝试匹配形状
+                        // 注意：需要确保匹配的单元格都未被其他图块匹配，且值都相同
+                        for (const auto& pieceSizePair : piecesWithSizes) 
+                        {
+                            const Piece* p = pieceSizePair.first;
+                            // 检查这个图块类型的所有形状，看是否能匹配board上的值
+                            for (size_t s = 0; s < p->shapes.size(); s++) 
+                            {
+                                const auto& testShape = p->shapes[s];
+                                // 尝试将当前单元格作为形状的一部分
+                                for (const auto& cellPos : testShape) 
+                                {
+                                    int testBaseRow = i - cellPos.first;
+                                    int testBaseCol = j - cellPos.second;
+                                    if (testBaseRow < 0 || testBaseCol < 0) continue;
+                                    
+                                    // 检查整个形状是否匹配，且所有单元格都未被其他形状匹配
+                                    bool matches = true;
+                                    int matchedCells = 0;
+                                    for (const auto& pos : testShape) 
+                                    {
+                                        int checkRow = testBaseRow + pos.first;
+                                        int checkCol = testBaseCol + pos.second;
+                                        if (checkRow < 0 || checkRow >= BOARD_SIZE ||
+                                            checkCol < 0 || checkCol >= BOARD_SIZE) 
+                                        {
+                                            matches = false;
+                                            break;
+                                        }
+                                        
+                                        // 检查值是否匹配
+                                        int val = (*currentBoard)[checkRow][checkCol];
+                                        if (val != cellValue) 
+                                        {
+                                            matches = false;
+                                            break;
+                                        }
+                                        
+                                        // 检查是否已经被其他图块匹配（避免重复匹配）
+                                        if (matchedInThisFrame[checkRow][checkCol]) 
+                                        {
+                                            matches = false;
+                                            break;
+                                        }
+                                        
+                                        matchedCells++;
+                                    }
+                                    
+                                    // 确保匹配的单元格数量等于形状大小
+                                    if (matches && matchedCells == (int)testShape.size()) 
+                                    {
+                                        pieceId = p->id;
+                                        piece = p;
+                                        // 保存匹配的形状索引和基准点，供后续使用
+                                        shapeIndex = (int)s;
+                                        baseRow = testBaseRow;
+                                        baseCol = testBaseCol;
+                                        
+                                        // 立即标记这些单元格为已匹配（在本帧中）
+                                        // 这样可以避免在同一个绘制周期内重复匹配
+                                        for (const auto& pos : testShape) 
+                                        {
+                                            int checkRow = testBaseRow + pos.first;
+                                            int checkCol = testBaseCol + pos.second;
+                                            if (checkRow >= 0 && checkRow < BOARD_SIZE &&
+                                                checkCol >= 0 && checkCol < BOARD_SIZE) 
+                                            {
+                                                matchedInThisFrame[checkRow][checkCol] = true;
+                                            }
+                                        }
+                                        
+                                        break;
+                                    }
+                                }
+                                if (pieceId >= 0) break;
+                            }
+                            if (pieceId >= 0) break;
+                        }
+                    } else 
+                    {
+                        // 如果通过pieceCounts找到了pieceId，找到对应的图块类型
+                        for (const auto& p : pieces) 
+                        {
+                            if (p.id == pieceId) 
+                            {
                         piece = &p;
                         break;
+                            }
+                        }
                     }
                 }
                 
                 if (!piece) continue;
                 
-                // 收集所有可能的匹配候选
+                // 如果已经通过shape匹配找到了piece和shapeIndex（showSolution=true时），直接使用
+                // 否则，收集所有可能的匹配候选
                 struct MatchCandidate {
                     int shapeIndex;
                     int baseRow;
@@ -1783,6 +2143,19 @@ void drawBoard(RenderWindow& window, Font& font) {
                 // 保存选中的形状单元格（用于后续标记drawn）
                 set<pair<int, int>> selectedShapeCells;
                 
+                // 如果已经通过shape匹配找到了shapeIndex和baseRow/baseCol（showSolution=true时），跳过形状匹配
+                if (showSolution && shapeIndex >= 0 && baseRow >= 0 && baseCol >= 0) {
+                    // 直接使用已匹配的结果
+                    selectedShapeCells.clear();
+                    const auto& shape = piece->shapes[shapeIndex];
+                    for (const auto& pos : shape) {
+                        selectedShapeCells.insert({baseRow + pos.first, baseCol + pos.second});
+                    }
+                    // 标记这些单元格为已匹配（在本帧中）
+                    for (const auto& cell : selectedShapeCells) {
+                        matchedInThisFrame[cell.first][cell.second] = true;
+                    }
+                } else {
                 // 从当前单元格(i, j)开始，尝试匹配所有可能的形状
                 for (size_t s = 0; s < piece->shapes.size(); s++) {
                     const auto& shape = piece->shapes[s];
@@ -1833,6 +2206,7 @@ void drawBoard(RenderWindow& window, Font& font) {
                         // 确保匹配的单元格数量等于形状大小
                         if (matches && matchedCells == (int)shape.size()) {
                             candidates.push_back({(int)s, startRow, startCol, matchedCells, shapeCells});
+                        }
                         }
                     }
                 }
@@ -1892,7 +2266,7 @@ void drawBoard(RenderWindow& window, Font& font) {
                 }
                 
                 // 如果这个图块实例正在被拖拽，跳过绘制（避免重影）
-                if (draggedPiece.isDragging && draggedPiece.pieceId == cellValue &&
+                if (draggedPiece.isDragging && draggedPiece.tempId == cellValue &&
                     baseRow >= 0 && baseCol >= 0 &&
                     baseRow == draggedPiece.originalRow && baseCol == draggedPiece.originalCol) {
                     continue;
@@ -1906,6 +2280,7 @@ void drawBoard(RenderWindow& window, Font& font) {
                     if (showSolution) {
                         // 自动求解结果：只绘制符合pieceCounts限制的图块
                         // 找到对应的pieceCounts条目
+                        bool foundMatch = false;
                         for (size_t pcIndex = 0; pcIndex < pieceCounts.size(); pcIndex++) {
                             const auto& pc = pieceCounts[pcIndex];
                             if (pc.pieceId == piece->id && pc.currentShapeIndex == shapeIndex) {
@@ -1914,13 +2289,88 @@ void drawBoard(RenderWindow& window, Font& font) {
                                 if (drawnCounts[pcIndex] < shouldDrawCounts[pcIndex]) {
                                     shouldDraw = true;
                                     drawnCounts[pcIndex]++;  // 增加已绘制计数
+                                    foundMatch = true;
                                     break;
                                 }
                             }
                         }
+                        // 如果没有找到精确匹配（可能因为currentShapeIndex不匹配），
+                        // 检查是否有相同形状的其他角度（如1x1、cross等）
+                        if (!foundMatch) {
+                            // 如果图块只有一个形状（如1x1、cross、3x3），所有角度的形状都相同
+                            if (piece->shapes.size() == 1) {
+                                for (size_t pcIndex = 0; pcIndex < pieceCounts.size(); pcIndex++) {
+                                    const auto& pc = pieceCounts[pcIndex];
+                                    if (pc.pieceId == piece->id) {
+                                        if (drawnCounts[pcIndex] < shouldDrawCounts[pcIndex]) {
+                                            shouldDraw = true;
+                                            drawnCounts[pcIndex]++;
+                                            foundMatch = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            } else {
+                                // 检查是否有相同形状的其他角度
+                                const auto& matchedShape = piece->shapes[shapeIndex];
+                                for (size_t pcIndex = 0; pcIndex < pieceCounts.size(); pcIndex++) {
+                                    const auto& pc = pieceCounts[pcIndex];
+                                    if (pc.pieceId == piece->id) {
+                                        if (pc.currentShapeIndex >= 0 && pc.currentShapeIndex < (int)piece->shapes.size()) {
+                                            const auto& pcShape = piece->shapes[pc.currentShapeIndex];
+                                            if (matchedShape.size() == pcShape.size()) {
+                                                set<pair<int, int>> matchedShapeSet(matchedShape.begin(), matchedShape.end());
+                                                set<pair<int, int>> pcShapeSet(pcShape.begin(), pcShape.end());
+                                                if (matchedShapeSet == pcShapeSet) {
+                                                    if (drawnCounts[pcIndex] < shouldDrawCounts[pcIndex]) {
+                                                        shouldDraw = true;
+                                                        drawnCounts[pcIndex]++;
+                                                        foundMatch = true;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     } else {
-                        // 用户手动编辑：绘制所有图块，不进行限制
-                        shouldDraw = true;
+                        // 用户手动编辑：需要正确计数已放置的图块
+                        // 找到对应的pieceCounts条目，检查是否已经绘制了足够的数量
+                        bool foundMatch = false;
+                        for (size_t pcIndex = 0; pcIndex < pieceCounts.size(); pcIndex++) {
+                            const auto& pc = pieceCounts[pcIndex];
+                            if (pc.pieceId == piece->id) {
+                                // 检查形状是否匹配（考虑旋转）
+                                bool shapeMatches = false;
+                                if (pc.currentShapeIndex >= 0 && pc.currentShapeIndex < (int)piece->shapes.size()) {
+                                    const auto& pcShape = piece->shapes[pc.currentShapeIndex];
+                                    const auto& matchedShape = piece->shapes[shapeIndex];
+                                    if (pcShape.size() == matchedShape.size()) {
+                                        set<pair<int, int>> pcShapeSet(pcShape.begin(), pcShape.end());
+                                        set<pair<int, int>> matchedShapeSet(matchedShape.begin(), matchedShape.end());
+                                        if (pcShapeSet == matchedShapeSet) {
+                                            shapeMatches = true;
+                                        }
+                                    }
+                                }
+                                // 如果形状匹配，或者图块只有一个形状（如1x1、cross、3x3），允许绘制
+                                if (shapeMatches || piece->shapes.size() == 1) {
+                                    // 检查是否已经绘制了足够的数量
+                                    if (drawnCounts[pcIndex] < shouldDrawCounts[pcIndex]) {
+                                        shouldDraw = true;
+                                        drawnCounts[pcIndex]++;  // 增加已绘制计数
+                                        foundMatch = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        // 如果没有找到匹配，仍然尝试绘制（可能是新放置的图块）
+                        if (!foundMatch) {
+                            shouldDraw = true;
+                        }
                     }
                 }
                 
@@ -2012,39 +2462,83 @@ void drawBoard(RenderWindow& window, Font& font) {
     }
     
     // 绘制求解结果和时间信息
-    if (fontAvailable) {
+    if (fontAvailable) 
+    {
         string resultText;
-        if (solving) {
+        
+        // 计算手动求解进度（当不在自动求解时显示）
+        if (!solving && !showSolution) 
+        {
+            int filledCells = 0;
+            for (int i = 0; i < BOARD_SIZE; i++) 
+            {
+                for (int j = 0; j < BOARD_SIZE; j++) 
+                {
+                    if (board[i][j] != 0) filledCells++;
+                }
+            }
+            int totalCells = BOARD_SIZE * BOARD_SIZE;
+            resultText = "Manual Progress: " + to_string(filledCells) + "/" + to_string(totalCells) + " cells";
+            
+            // 如果完成，显示成功消息
+            if (filledCells == totalCells) 
+            {
+                // 检查是否所有图块都已正确放置
+                vector<int> usedCounts = calculateUsedPieceCounts();
+                bool allPiecesUsed = true;
+                for (size_t i = 0; i < pieceCounts.size(); i++) 
+                {
+                    if (usedCounts[i] != pieceCounts[i].count) 
+                    {
+                        allPiecesUsed = false;
+                        break;
+                    }
+                }
+                if (allPiecesUsed) 
+                {
+                    resultText = "Manual Solution Complete!";
+                }
+            }
+        } else if (solving) 
+        {
             // 实时显示精确时间（保留1位小数）
             float currentTime = solveTimer.getElapsedTime().asSeconds();
             ostringstream oss;
             oss.precision(1);
             oss << fixed << currentTime;
             resultText = "Solving... Time: " + oss.str() + "s";
-        } else if (solutionFound && solveTime > 0.0f) {
+        } else if (solutionFound && solveTime > 0.0f) 
+        {
             ostringstream oss;
             oss.precision(1);
             oss << fixed << solveTime;
             // 检查是否是完整解
             int filledCells = 0;
-            for (int i = 0; i < BOARD_SIZE; i++) {
-                for (int j = 0; j < BOARD_SIZE; j++) {
+            for (int i = 0; i < BOARD_SIZE; i++)
+             {
+                for (int j = 0; j < BOARD_SIZE; j++) 
+                {
                     if (solutionBoard[i][j] != 0) filledCells++;
                 }
             }
-            if (filledCells == BOARD_SIZE * BOARD_SIZE && solved) {
-                resultText = "Solution Found! Time: " + oss.str() + "s";
-            } else {
+            if (filledCells == BOARD_SIZE * BOARD_SIZE && solved) 
+            {
+            resultText = "Solution Found! Time: " + oss.str() + "s";
+            } else
+             {
                 // 部分解：显示最好的成果
                 resultText = "Best Progress: " + to_string(bestFilledCells) + "/" + to_string(BOARD_SIZE * BOARD_SIZE) + " cells. Time: " + oss.str() + "s";
             }
-        } else if (!solving && solveTime > 0.0f && !solutionFound) {
-            if (solveTimeout) {
+        } else if (!solving && solveTime > 0.0f && !solutionFound) 
+        {
+            if (solveTimeout) 
+            {
                 ostringstream timeoutOss;
                 timeoutOss.precision(1);
                 timeoutOss << fixed << estimatedSolveTime;
                 resultText = "Timeout! No solution found in " + timeoutOss.str() + "s";
-            } else {
+            } else 
+            {
                 ostringstream oss;
                 oss.precision(1);
                 oss << fixed << solveTime;
@@ -2052,98 +2546,53 @@ void drawBoard(RenderWindow& window, Font& font) {
             }
         }
         
-        if (!resultText.empty()) {
+        if (!resultText.empty()) 
+        {
             Text result;
             result.setFont(font);
             result.setString(resultText);
             result.setCharacterSize(14);
             result.setPosition(buttonX, buttonY + buttonHeight + 5);
-            result.setFillColor(solutionFound ? Color(0, 150, 0) : (solveTimeout ? Color(200, 0, 0) : Color::Black));
+            
+            // 设置颜色：手动求解完成显示绿色，自动求解完成显示绿色，超时显示红色，其他显示黑色
+            Color textColor = Color::Black;
+            if (resultText.find("Manual Solution Complete") != string::npos) 
+            {
+                textColor = Color(0, 150, 0);  // 绿色
+            } else if (solutionFound) 
+            {
+                textColor = Color(0, 150, 0);  // 绿色
+            } else if (solveTimeout) 
+            {
+                textColor = Color(200, 0, 0);  // 红色
+            } else if (resultText.find("Manual Progress") != string::npos) 
+            {
+                // 手动求解进度：根据完成度显示不同颜色
+                int filledCells = 0;
+                for (int i = 0; i < BOARD_SIZE; i++) 
+                {
+                    for (int j = 0; j < BOARD_SIZE; j++) 
+                    {
+                        if (board[i][j] != 0) filledCells++;
+                    }
+                }
+                int totalCells = BOARD_SIZE * BOARD_SIZE;
+                if (filledCells == totalCells) 
+                {
+                    textColor = Color(0, 150, 0);  // 完成：绿色
+                } else if (filledCells >= totalCells * 0.8) 
+                {
+                    textColor = Color(200, 150, 0);  // 接近完成：橙色
+                } else 
+                {
+                    textColor = Color::Black;  // 进行中：黑色
+                }
+            }
+            
+            result.setFillColor(textColor);
             window.draw(result);
         }
         
-        // 绘制测试用例1按钮（在Auto Solve按钮右边）
-        int testButton1X = buttonX + buttonWidth + 10;
-        RectangleShape testButton1(Vector2f(buttonWidth, buttonHeight));
-        testButton1.setPosition(testButton1X, buttonY);
-        testButton1.setFillColor(Color(100, 150, 200));  // 蓝色表示测试按钮
-        testButton1.setOutlineThickness(2);
-        testButton1.setOutlineColor(Color::Black);
-        window.draw(testButton1);
-        
-        if (fontAvailable) {
-            Text testButton1Text;
-            testButton1Text.setFont(font);
-            testButton1Text.setString("Test Case 1");
-            testButton1Text.setCharacterSize(14);
-            testButton1Text.setFillColor(Color::White);
-            FloatRect test1TextBounds = testButton1Text.getLocalBounds();
-            testButton1Text.setPosition(testButton1X + (buttonWidth - test1TextBounds.width) / 2,
-                                     buttonY + (buttonHeight - test1TextBounds.height) / 2);
-            window.draw(testButton1Text);
-            
-            // 在测试用例1按钮下方显示预估求解时间
-            float testCase1EstimatedTime = estimateSolveTime(pieceCounts);
-            // 临时设置测试用例1的pieceCounts来计算预估时间
-            vector<PieceCount> tempCounts1;
-            for (const auto& piece : pieces) {
-                int count = 0;
-                if (piece.name == "cross") count = 4;
-                else if (piece.name == "1x1-1") count = 44;
-                tempCounts1.push_back({piece.id, count, 0});
-            }
-            testCase1EstimatedTime = estimateSolveTime(tempCounts1);
-            ostringstream est1Oss;
-            est1Oss.precision(1);
-            est1Oss << fixed << testCase1EstimatedTime;
-            Text estimatedTime1Text("Est. Time: " + est1Oss.str() + "s", font, 12);
-            estimatedTime1Text.setPosition(testButton1X, buttonY + buttonHeight + 5);
-            estimatedTime1Text.setFillColor(Color(100, 100, 100));  // 灰色
-            window.draw(estimatedTime1Text);
-        }
-        
-        // 绘制测试用例2按钮（在测试用例1按钮右边）
-        int testButton2X = testButton1X + buttonWidth + 10;
-        RectangleShape testButton2(Vector2f(buttonWidth, buttonHeight));
-        testButton2.setPosition(testButton2X, buttonY);
-        testButton2.setFillColor(Color(150, 100, 200));  // 紫色表示测试用例2按钮
-        testButton2.setOutlineThickness(2);
-        testButton2.setOutlineColor(Color::Black);
-        window.draw(testButton2);
-        
-        if (fontAvailable) {
-            Text testButton2Text;
-            testButton2Text.setFont(font);
-            testButton2Text.setString("Test Case 2");
-            testButton2Text.setCharacterSize(14);
-            testButton2Text.setFillColor(Color::White);
-            FloatRect test2TextBounds = testButton2Text.getLocalBounds();
-            testButton2Text.setPosition(testButton2X + (buttonWidth - test2TextBounds.width) / 2,
-                                     buttonY + (buttonHeight - test2TextBounds.height) / 2);
-            window.draw(testButton2Text);
-            
-            // 在测试用例2按钮下方显示预估求解时间
-            vector<PieceCount> tempCounts2;
-            for (const auto& piece : pieces) {
-                if (piece.name == "L-shape") {
-                    // 为每个角度创建独立的条目（与setTestCase2保持一致）
-                    tempCounts2.push_back({piece.id, 3, 0});  // 3个L-shape_0度
-                    tempCounts2.push_back({piece.id, 3, 2});  // 3个L-shape_180度
-                    tempCounts2.push_back({piece.id, 1, 1});  // 1个L-shape_90度
-                    tempCounts2.push_back({piece.id, 1, 3});  // 1个L-shape_270度
-                } else if (piece.name == "1x1-1") {
-                    tempCounts2.push_back({piece.id, 4, 0});
-                }
-            }
-            float testCase2EstimatedTime = estimateSolveTime(tempCounts2);
-            ostringstream est2Oss;
-            est2Oss.precision(1);
-            est2Oss << fixed << testCase2EstimatedTime;
-            Text estimatedTime2Text("Est. Time: " + est2Oss.str() + "s", font, 12);
-            estimatedTime2Text.setPosition(testButton2X, buttonY + buttonHeight + 5);
-            estimatedTime2Text.setFillColor(Color(100, 100, 100));  // 灰色
-            window.draw(estimatedTime2Text);
-        }
         
         // 按键说明（移除space键介绍）
         // 往下移，避免遮盖求解时间显示（求解时间在buttonY + buttonHeight + 5，按键说明从buttonY + buttonHeight + 30开始）
@@ -2155,17 +2604,52 @@ void drawBoard(RenderWindow& window, Font& font) {
         window.draw(controlsTitle);
         controlsY += 25;
         
-        vector<string> controlTexts = {
-            "E - Open/Close Editor",
-            "Left Click - Drag Piece",
-            "Right Click - Remove Piece",
-            "Mouse - Drag Editor Window"
+        vector<string> controlTexts = 
+        {
+            "Mouse Controls:",
+            "  Left Click - Drag Piece",
+            "  Right Click - Remove Piece",
+            "  Mouse - Drag Editor Window",
+            "",
+            "Keyboard Controls (General):",
+            "  E - Open/Close Editor",
+            "  Tab - Select Piece in Preview",
+            "  Shift+Tab - Previous Piece",
+            "  W/A/S/D - Move Selected Piece",
+            "  Space - Place Selected Piece",
+            "  Delete - Clear Board",
+            "  Backspace - Remove Last Piece",
+            "",
+            "Keyboard Controls (Editor):",
+            "  Tab/Shift+Tab - Switch Piece",
+            "  +/- - Change Count",
+            "  Left/Right - Change Angle",
+            "  Enter - Confirm Changes"
         };
         
-        for (const auto& text : controlTexts) {
+        for (const auto& text : controlTexts)
+         {
+            if (text.empty()) 
+            {
+                // 空行，增加间距
+                controlsY += 10;
+                continue;
+            }
+            
             Text control(text, font, 16);
             control.setPosition(buttonX, controlsY);
-            control.setFillColor(Color::Black);
+            
+            // 如果是标题行（以冒号结尾），使用粗体
+            if (text.back() == ':') 
+            {
+                control.setFillColor(Color::Black);
+                control.setStyle(Text::Bold);
+            } else 
+            {
+                control.setFillColor(Color(60, 60, 60));  // 深灰色
+                control.setStyle(Text::Regular);
+            }
+            
             window.draw(control);
             controlsY += 22;
         }
@@ -2180,13 +2664,16 @@ void drawBoard(RenderWindow& window, Font& font) {
         controlsY += 22;
         
         // 显示每个初始图块的种类、数量和角度
-        for (const auto& pc : pieceCounts) {
+        for (const auto& pc : pieceCounts) 
+        {
             if (pc.count == 0) continue;
             
             // 找到对应的图块定义
             const Piece* piece = nullptr;
-            for (const auto& p : pieces) {
-                if (p.id == pc.pieceId) {
+            for (const auto& p : pieces) 
+            {
+                if (p.id == pc.pieceId) 
+                {
                     piece = &p;
                     break;
                 }
@@ -2210,7 +2697,8 @@ void drawBoard(RenderWindow& window, Font& font) {
         }
         
         // 显示已使用图块列表（仅在求解结束后显示）
-        if (solutionFound || solved) {
+        if (solutionFound || solved)
+         {
             controlsY += 10;  // 增加间距
             Text usedTitle("Used Pieces:", font, 20);
             usedTitle.setPosition(buttonX, controlsY);
@@ -2223,7 +2711,8 @@ void drawBoard(RenderWindow& window, Font& font) {
             vector<int> usedCounts = calculateUsedPieceCounts();
             
             // 显示每个已使用的图块
-            for (size_t pcIndex = 0; pcIndex < pieceCounts.size(); pcIndex++) {
+            for (size_t pcIndex = 0; pcIndex < pieceCounts.size(); pcIndex++)
+             {
                 const auto& pc = pieceCounts[pcIndex];
                 int usedCount = usedCounts[pcIndex];
                 
@@ -2231,8 +2720,10 @@ void drawBoard(RenderWindow& window, Font& font) {
                 
                 // 找到对应的图块定义
                 const Piece* piece = nullptr;
-                for (const auto& p : pieces) {
-                    if (p.id == pc.pieceId) {
+                for (const auto& p : pieces) 
+                {
+                    if (p.id == pc.pieceId) 
+                    {
                         piece = &p;
                         break;
                     }
@@ -2251,9 +2742,11 @@ void drawBoard(RenderWindow& window, Font& font) {
                 Text pieceInfo(oss.str(), font, 16);
                 pieceInfo.setPosition(buttonX, controlsY);
                 // 如果全部使用，用绿色；否则用橙色
-                if (usedCount == pc.count) {
+                if (usedCount == pc.count) 
+                {
                     pieceInfo.setFillColor(Color(0, 150, 0));  // 绿色
-                } else {
+                } else 
+                {
                     pieceInfo.setFillColor(Color(200, 100, 0));  // 橙色
                 }
                 window.draw(pieceInfo);
@@ -2263,55 +2756,19 @@ void drawBoard(RenderWindow& window, Font& font) {
     }
     
     // 绘制拖拽预览
-    if (draggedPiece.isDragging && draggedPiece.pieceId >= 0) {
+    if (draggedPiece.isDragging && draggedPiece.pieceId >= 0) 
+    {
         Vector2i mousePos = Mouse::getPosition(window);
         int offsetX = 50;
         int offsetY = 50;
         
-        // 检查鼠标是否在预览区
+        // 检查鼠标是否在预览区（用于边框显示，但不影响图块跟随鼠标）
         int previewX = 50;
         int previewY = 50 + BOARD_SIZE * CELL_SIZE + 20;
         int previewWidth = BOARD_SIZE * CELL_SIZE;
         int previewHeight = 200;
         bool inPreviewArea = (mousePos.x >= previewX && mousePos.x < previewX + previewWidth &&
                              mousePos.y >= previewY && mousePos.y < previewY + previewHeight);
-        
-        // 如果鼠标在预览区，将预览显示在预览区上方
-        int previewDisplayX, previewDisplayY;
-        if (inPreviewArea) {
-            // 计算图块的边界
-            const Piece* piece = nullptr;
-            for (const auto& p : pieces) {
-                if (p.id == draggedPiece.pieceId) {
-                    piece = &p;
-                    break;
-                }
-            }
-            if (piece && draggedPiece.shapeIndex < (int)piece->shapes.size()) {
-                const auto& shape = piece->shapes[draggedPiece.shapeIndex];
-                int minRow = shape[0].first, maxRow = shape[0].first;
-                int minCol = shape[0].second, maxCol = shape[0].second;
-                for (const auto& cell : shape) {
-                    minRow = min(minRow, cell.first);
-                    maxRow = max(maxRow, cell.first);
-                    minCol = min(minCol, cell.second);
-                    maxCol = max(maxCol, cell.second);
-                }
-                int shapeWidth = (maxCol - minCol + 1) * CELL_SIZE;
-                int shapeHeight = (maxRow - minRow + 1) * CELL_SIZE;
-                previewDisplayX = previewX + (previewWidth - shapeWidth) / 2;
-                previewDisplayY = previewY - shapeHeight - 10;  // 预览区上方10像素
-    } else {
-                previewDisplayX = mousePos.x;
-                previewDisplayY = mousePos.y;
-            }
-        } else {
-            // 计算鼠标在游戏板上的位置
-            int boardX = mousePos.x - offsetX;
-            int boardY = mousePos.y - offsetY;
-            previewDisplayX = offsetX;
-            previewDisplayY = offsetY;
-        }
         
         // 计算鼠标在游戏板上的位置（用于边框显示）
         int boardX = mousePos.x - offsetX;
@@ -2321,30 +2778,37 @@ void drawBoard(RenderWindow& window, Font& font) {
         
         // 找到对应的图块
         const Piece* piece = nullptr;
-        for (const auto& p : pieces) {
-            if (p.id == draggedPiece.pieceId) {
+        for (const auto& p : pieces)
+         {
+            if (p.id == draggedPiece.pieceId) 
+            {
                 piece = &p;
                 break;
             }
         }
         
-        if (piece && draggedPiece.shapeIndex < (int)piece->shapes.size()) {
+        if (piece && draggedPiece.shapeIndex < (int)piece->shapes.size()) 
+        {
             const auto& shape = piece->shapes[draggedPiece.shapeIndex];
             
             // 使用贴图绘制预览（半透明）
             Texture* tex = nullptr;
-            for (auto& pt : pieceTextures) {
-                if (pt.pieceId == piece->id && pt.loaded) {
+            for (auto& pt : pieceTextures) 
+            {
+                if (pt.pieceId == piece->id && pt.loaded) 
+                {
                     tex = &pt.texture;
                     break;
                 }
             }
             
-            if (tex) {
+            if (tex) 
+            {
                 // 计算图块的边界
                 int minRow = shape[0].first, maxRow = shape[0].first;
                 int minCol = shape[0].second, maxCol = shape[0].second;
-                for (const auto& cell : shape) {
+                for (const auto& cell : shape) 
+                {
                     minRow = min(minRow, cell.first);
                     maxRow = max(maxRow, cell.first);
                     minCol = min(minCol, cell.second);
@@ -2358,7 +2822,8 @@ void drawBoard(RenderWindow& window, Font& font) {
                 static map<pair<int, int>, unique_ptr<RenderTexture>> dragPreviewCache;
                 pair<int, int> cacheKey = {piece->id, draggedPiece.shapeIndex};
                 
-                if (dragPreviewCache.find(cacheKey) == dragPreviewCache.end()) {
+                if (dragPreviewCache.find(cacheKey) == dragPreviewCache.end()) 
+                {
                     auto renderTex = make_unique<RenderTexture>();
                     renderTex->create(shapeWidth, shapeHeight);
                     renderTex->clear(Color::Transparent);
@@ -2376,7 +2841,8 @@ void drawBoard(RenderWindow& window, Font& font) {
                     // 计算缩放和位置，使贴图充满形状区域
                     // 如果旋转了90度或270度，纹理的宽高在视觉上会交换
                     float scaleX, scaleY;
-                    if ((int)rotation % 180 == 90) {
+                    if ((int)rotation % 180 == 90)
+                     {
                         // 旋转90/270度：形状宽度对应纹理高度，形状高度对应纹理宽度
                         scaleX = (float)shapeWidth / tex->getSize().y;
                         scaleY = (float)shapeHeight / tex->getSize().x;
@@ -2384,7 +2850,8 @@ void drawBoard(RenderWindow& window, Font& font) {
                         float uniformScale = max(scaleX, scaleY);
                         scaleX = uniformScale;
                         scaleY = uniformScale;
-                    } else {
+                    } else
+                     {
                         // 0度或180度：正常对应
                         scaleX = (float)shapeWidth / tex->getSize().x;
                         scaleY = (float)shapeHeight / tex->getSize().y;
@@ -2405,40 +2872,21 @@ void drawBoard(RenderWindow& window, Font& font) {
                 
                 // 绘制到窗口（半透明）
                 Sprite finalSprite(dragPreviewCache[cacheKey]->getTexture());
-                if (inPreviewArea) {
-                    finalSprite.setPosition(previewDisplayX + minCol * CELL_SIZE,
-                                          previewDisplayY + minRow * CELL_SIZE);
-                } else {
+                {
                     // 计算预览位置：鼠标位置减去拖拽偏移量，再减去形状的最小偏移
                     // 这样鼠标在图块上的相对位置保持不变
-                    int previewX = mousePos.x - draggedPiece.dragOffset.x - minCol * CELL_SIZE;
-                    int previewY = mousePos.y - draggedPiece.dragOffset.y - minRow * CELL_SIZE;
-                    finalSprite.setPosition(previewX, previewY);
+                    // 无论鼠标在哪里，图块都应该跟随鼠标
+                    int spriteX = mousePos.x - draggedPiece.dragOffset.x - minCol * CELL_SIZE;
+                    int spriteY = mousePos.y - draggedPiece.dragOffset.y - minRow * CELL_SIZE;
+                    finalSprite.setPosition(spriteX, spriteY);
                 }
                 finalSprite.setColor(Color(255, 255, 255, 150));  // 半透明
                 window.draw(finalSprite);
                 
-                // 绘制黄色边框
-                if (inPreviewArea) {
-                    for (const auto& cell : shape) {
-                        int previewRow = row + cell.first;
-                        int previewCol = col + cell.second;
-                        
-                        if (previewRow >= 0 && previewRow < BOARD_SIZE &&
-                            previewCol >= 0 && previewCol < BOARD_SIZE) {
-                            RectangleShape outline(Vector2f(CELL_SIZE - 2, CELL_SIZE - 2));
-                            outline.setPosition(previewDisplayX + previewCol * CELL_SIZE + 1,
-                                              previewDisplayY + previewRow * CELL_SIZE + 1);
-                            outline.setFillColor(Color::Transparent);
-                            outline.setOutlineThickness(2);
-                            outline.setOutlineColor(Color::Yellow);
-                            window.draw(outline);
-                        }
-                    }
-                } else {
-                    // 在游戏板上：使用与预览图块相同的位置计算方式
+                // 绘制黄色边框：无论鼠标在哪里，都使用相同的位置计算方式
                     // minCol 和 minRow 已经在上面计算过了（在tex块中）
-                    for (const auto& cell : shape) {
+                for (const auto& cell : shape) 
+                {
                         int cellX = mousePos.x - draggedPiece.dragOffset.x + (cell.second - minCol) * CELL_SIZE;
                         int cellY = mousePos.y - draggedPiece.dragOffset.y + (cell.first - minRow) * CELL_SIZE;
                         RectangleShape outline(Vector2f(CELL_SIZE - 2, CELL_SIZE - 2));
@@ -2448,29 +2896,34 @@ void drawBoard(RenderWindow& window, Font& font) {
                         outline.setOutlineColor(Color::Yellow);
                         window.draw(outline);
                     }
-                }
-    } else {
+            } else 
+            {
                 // 回退到颜色填充
                 // 计算图块的边界（与上面的tex块中相同）
                 int minRow = shape[0].first, maxRow = shape[0].first;
                 int minCol = shape[0].second, maxCol = shape[0].second;
-                for (const auto& cell : shape) {
+                for (const auto& cell : shape) 
+                {
                     minRow = min(minRow, cell.first);
                     maxRow = max(maxRow, cell.first);
                     minCol = min(minCol, cell.second);
                     maxCol = max(maxCol, cell.second);
                 }
                 
-                if (inPreviewArea) {
-                    for (const auto& cell : shape) {
+                if (inPreviewArea) 
+                {
+                    for (const auto& cell : shape) 
+                    {
                         int previewRow = row + cell.first;
                         int previewCol = col + cell.second;
                         
                         if (previewRow >= 0 && previewRow < BOARD_SIZE &&
-                            previewCol >= 0 && previewCol < BOARD_SIZE) {
+                            previewCol >= 0 && previewCol < BOARD_SIZE)
+                             {
                             RectangleShape previewCell(Vector2f(CELL_SIZE - 2, CELL_SIZE - 2));
-                            previewCell.setPosition(previewDisplayX + previewCol * CELL_SIZE + 1,
-                                                  previewDisplayY + previewRow * CELL_SIZE + 1);
+                            int cellX = mousePos.x - draggedPiece.dragOffset.x + (previewCol - minCol) * CELL_SIZE;
+                            int cellY = mousePos.y - draggedPiece.dragOffset.y + (previewRow - minRow) * CELL_SIZE;
+                            previewCell.setPosition(cellX + 1, cellY + 1);
                             Color previewColor = piece->color;
                             previewColor.a = 150;  // 半透明
                             previewCell.setFillColor(previewColor);
@@ -2479,9 +2932,11 @@ void drawBoard(RenderWindow& window, Font& font) {
                             window.draw(previewCell);
                         }
                     }
-                } else {
+                } else 
+                {
                     // 在游戏板上：使用与预览图块相同的位置计算方式
-                    for (const auto& cell : shape) {
+                    for (const auto& cell : shape) 
+                    {
                         int cellX = mousePos.x - draggedPiece.dragOffset.x + (cell.second - minCol) * CELL_SIZE;
                         int cellY = mousePos.y - draggedPiece.dragOffset.y + (cell.first - minRow) * CELL_SIZE;
                         RectangleShape previewCell(Vector2f(CELL_SIZE - 2, CELL_SIZE - 2));
@@ -2492,6 +2947,147 @@ void drawBoard(RenderWindow& window, Font& font) {
                         previewCell.setOutlineThickness(2);
                         previewCell.setOutlineColor(Color::Yellow);
                         window.draw(previewCell);
+                    }
+                }
+            }
+        }
+    }
+    
+    // 绘制键盘选中的图块预览（在游戏板上）
+    if (!showEditor && previewSelectedIndex >= 0 && keyboardPlacePieceId >= 0 && 
+        keyboardPlaceRow >= 0 && keyboardPlaceCol >= 0 && 
+        keyboardPlaceShapeIndex >= 0) 
+    {
+        // 找到对应的图块
+        const Piece* piece = nullptr;
+        for (const auto& p : pieces) 
+        {
+            if (p.id == keyboardPlacePieceId) 
+            {
+                piece = &p;
+                break;
+            }
+        }
+        
+        if (piece && keyboardPlaceShapeIndex < (int)piece->shapes.size()) 
+        {
+            const auto& shape = piece->shapes[keyboardPlaceShapeIndex];
+            
+            // 计算图块的边界（用于计算基准点）
+            int minRow = shape[0].first, maxRow = shape[0].first;
+            int minCol = shape[0].second, maxCol = shape[0].second;
+            for (const auto& cell : shape) 
+            {
+                minRow = min(minRow, cell.first);
+                maxRow = max(maxRow, cell.first);
+                minCol = min(minCol, cell.second);
+                maxCol = max(maxCol, cell.second);
+            }
+            
+            // 计算基准点（确保图块在游戏板内）
+            int baseRow = keyboardPlaceRow - minRow;
+            int baseCol = keyboardPlaceCol - minCol;
+            
+            // 检查是否可以放置（用于显示不同颜色）
+            bool canPlaceHere = false;
+            if (baseRow >= 0 && baseRow < BOARD_SIZE && 
+                baseCol >= 0 && baseCol < BOARD_SIZE) 
+            {
+                canPlaceHere = canPlace(shape, baseRow, baseCol);
+            }
+            
+            // 使用贴图绘制预览（半透明）
+            Texture* tex = nullptr;
+            for (auto& pt : pieceTextures) 
+            {
+                if (pt.pieceId == piece->id && pt.loaded) 
+                {
+                    tex = &pt.texture;
+                    break;
+                }
+            }
+            
+            if (tex) 
+            {
+                int shapeWidth = (maxCol - minCol + 1) * CELL_SIZE;
+                int shapeHeight = (maxRow - minRow + 1) * CELL_SIZE;
+                
+                // 使用RenderTexture绘制完整形状（半透明）
+                static map<pair<int, int>, unique_ptr<RenderTexture>> keyboardPreviewCache;
+                pair<int, int> cacheKey = {piece->id, keyboardPlaceShapeIndex};
+                
+                if (keyboardPreviewCache.find(cacheKey) == keyboardPreviewCache.end()) 
+                {
+                    auto renderTex = make_unique<RenderTexture>();
+                    renderTex->create(shapeWidth, shapeHeight);
+                    renderTex->clear(Color::Transparent);
+                    
+                    Sprite sprite(*tex);
+                    // 根据shapeIndex旋转贴图
+                    float rotation = keyboardPlaceShapeIndex * 90.0f;
+                    sprite.setRotation(rotation);
+                    
+                    // 计算旋转后的中心点
+                    float centerX = tex->getSize().x / 2.0f;
+                    float centerY = tex->getSize().y / 2.0f;
+                    sprite.setOrigin(centerX, centerY);
+                    
+                    // 计算缩放和位置
+                    float scaleX, scaleY;
+                    if ((int)rotation % 180 == 90) 
+                    {
+                        scaleX = (float)shapeWidth / tex->getSize().y;
+                        scaleY = (float)shapeHeight / tex->getSize().x;
+                        float uniformScale = max(scaleX, scaleY);
+                        scaleX = uniformScale;
+                        scaleY = uniformScale;
+                    } else 
+                    {
+                        scaleX = (float)shapeWidth / tex->getSize().x;
+                        scaleY = (float)shapeHeight / tex->getSize().y;
+                        float uniformScale = max(scaleX, scaleY);
+                        scaleX = uniformScale;
+                        scaleY = uniformScale;
+                    }
+                    sprite.setScale(scaleX, scaleY);
+                    sprite.setPosition(shapeWidth / 2.0f, shapeHeight / 2.0f);
+                    renderTex->draw(sprite);
+                    renderTex->display();
+                    keyboardPreviewCache[cacheKey] = move(renderTex);
+                }
+                
+                // 绘制到窗口（半透明）
+                Sprite finalSprite(keyboardPreviewCache[cacheKey]->getTexture());
+                int spriteX = offsetX + baseCol * CELL_SIZE + minCol * CELL_SIZE;
+                int spriteY = offsetY + baseRow * CELL_SIZE + minRow * CELL_SIZE;
+                finalSprite.setPosition(spriteX, spriteY);
+                
+                // 根据是否可以放置显示不同颜色
+                if (canPlaceHere) 
+                {
+                    finalSprite.setColor(Color(255, 255, 255, 150));  // 半透明白色（可以放置）
+                } else 
+                {
+                    finalSprite.setColor(Color(255, 100, 100, 150));  // 半透明红色（不能放置）
+                }
+                window.draw(finalSprite);
+                
+                // 绘制边框
+                Color outlineColor = canPlaceHere ? Color::Yellow : Color::Red;
+                for (const auto& cell : shape) 
+                {
+                    int cellRow = baseRow + cell.first;
+                    int cellCol = baseCol + cell.second;
+                    if (cellRow >= 0 && cellRow < BOARD_SIZE && 
+                        cellCol >= 0 && cellCol < BOARD_SIZE) 
+                    {
+                        RectangleShape outline(Vector2f(CELL_SIZE - 2, CELL_SIZE - 2));
+                        outline.setPosition(offsetX + cellCol * CELL_SIZE + 1, 
+                                          offsetY + cellRow * CELL_SIZE + 1);
+                        outline.setFillColor(Color::Transparent);
+                        outline.setOutlineThickness(2);
+                        outline.setOutlineColor(outlineColor);
+                        window.draw(outline);
                     }
                 }
             }
@@ -2593,12 +3189,12 @@ void loadPieceTextures() {
             }
         }
         
-        // 如果配置文件中指定的路径加载失败，且不是默认路径，尝试使用默认路径
+            // 如果配置文件中指定的路径加载失败，且不是默认路径，尝试使用默认路径
         if (!textureLoaded && useConfigPath) {
-            string defaultPath = "resources/" + piece.name + ".png";
-            if (pt.texture.loadFromFile(defaultPath)) {
+                string defaultPath = "resources/" + piece.name + ".png";
+                if (pt.texture.loadFromFile(defaultPath)) {
                 textureLoaded = true;
-                texturePath = defaultPath;  // 更新为默认路径，用于后续保存
+                    texturePath = defaultPath;  // 更新为默认路径，用于后续保存
                 // 对于line5，再次检查透明度
                 if (piece.name == "line5") {
                     Image checkImg = pt.texture.copyToImage();
@@ -2616,15 +3212,13 @@ void loadPieceTextures() {
                         textureLoaded = false;
                     }
                 }
+                }
             }
-        }
-        
+            
         pt.loaded = textureLoaded;
         
         if (!textureLoaded) {
-            
             // 如果仍然加载失败，创建默认贴图
-            if (!pt.loaded) {
                 // 如果文件不存在，创建默认贴图（显示图块形状）
                 if (!piece.shapes.empty()) {
                 // 使用所有形状的最大边界来确保长宽比正确
@@ -2711,7 +3305,6 @@ void loadPieceTextures() {
                         system("mkdir -p resources 2>/dev/null");
                         #endif
                         img.saveToFile(texturePath);
-                    }
                 }
             }
         }
@@ -2806,8 +3399,8 @@ void drawPieceTexture(RenderWindow& window, const Piece& piece, int shapeIndex,
                 scaleX = (float)shapeWidth / textureRect.width;
                 scaleY = (float)shapeHeight / textureRect.height;
             }
-            // 使用统一的缩放比例确保完全填充（取较大的缩放值）
-            float uniformScale = max(scaleX, scaleY);
+                // 使用统一的缩放比例确保完全填充（取较大的缩放值）
+                float uniformScale = max(scaleX, scaleY);
             sprite.setScale(uniformScale, uniformScale);
             
             // 设置origin到裁剪区域的中心（在旋转之前设置）
@@ -2869,7 +3462,8 @@ void drawPieceTexture(RenderWindow& window, const Piece& piece, int shapeIndex,
     }
 }
 
-int main() {
+int main() 
+{
     // 设置控制台代码页为UTF-8（Windows）
     #ifdef _WIN32
     system("chcp 65001 >nul");
@@ -2885,14 +3479,18 @@ int main() {
     // 首先尝试从嵌入的资源加载字体
     #ifdef _WIN32
     HRSRC hRes = FindResource(NULL, MAKEINTRESOURCE(101), RT_RCDATA);
-    if (hRes) {
+    if (hRes)
+     {
         HGLOBAL hMem = LoadResource(NULL, hRes);
-        if (hMem) {
+        if (hMem) 
+        {
             void* pFontData = LockResource(hMem);
             DWORD size = SizeofResource(NULL, hRes);
-            if (pFontData && size > 0) {
+            if (pFontData && size > 0) 
+            {
                 // 从内存加载字体
-                if (font.loadFromMemory(pFontData, (size_t)size)) {
+                if (font.loadFromMemory(pFontData, (size_t)size)) 
+                {
                     fontLoaded = true;
                 }
             }
@@ -2901,12 +3499,16 @@ int main() {
     #endif
     
     // 如果嵌入资源加载失败，尝试从文件加载
-    if (!fontLoaded) {
-    if (font.loadFromFile("arial.ttf")) {
+    if (!fontLoaded) 
+    {
+    if (font.loadFromFile("arial.ttf")) 
+        {
         fontLoaded = true;
-    } else if (font.loadFromFile("C:/Windows/Fonts/arial.ttf")) {
+        } else if (font.loadFromFile("C:/Windows/Fonts/arial.ttf")) 
+        {
         fontLoaded = true;
-    } else if (font.loadFromFile("C:/Windows/Fonts/msyh.ttc")) {
+        } else if (font.loadFromFile("C:/Windows/Fonts/msyh.ttc")) 
+        {
         fontLoaded = true;
         }
     }
@@ -2914,8 +3516,10 @@ int main() {
     initializePieces();
     loadPieceTextures();
     
-    for (int i = 0; i < BOARD_SIZE; i++) {
-        for (int j = 0; j < BOARD_SIZE; j++) {
+    for (int i = 0; i < BOARD_SIZE; i++) 
+    {
+        for (int j = 0; j < BOARD_SIZE; j++)
+         {
             board[i][j] = 0;
             solutionBoard[i][j] = 0;
         }
@@ -2927,39 +3531,630 @@ int main() {
     bool mouseLeftPressed = false;
     bool mouseRightPressed = false;
     
-    while (window.isOpen()) {
+    while (window.isOpen()) 
+    {
         Event event;
-        while (window.pollEvent(event)) {
-            if (event.type == Event::Closed) {
+        while (window.pollEvent(event)) 
+        {
+            if (event.type == Event::Closed) 
+            {
                 window.close();
             }
             
-            if (event.type == Event::KeyPressed) {
-                // 空格键功能已改为按钮，这里只保留E键打开编辑器
-                if (event.key.code == Keyboard::E) {
+            if (event.type == Event::KeyPressed) 
+            {
+                // E键打开/关闭编辑器
+                if (event.key.code == Keyboard::E) 
+                {
                     showEditor = !showEditor;
+                    // 如果打开编辑器且没有选中图块，自动选中第一个图块
+                    if (showEditor && (selectedPieceType < 0 || selectedPieceType >= (int)pieces.size())) {
+                        if (!pieces.empty()) {
+                            selectedPieceType = 0;
+                            previewPieceType = 0;
+                        }
                 }
             }
             
-            // 处理自动求解按钮点击
-            if (event.type == Event::MouseButtonPressed && 
-                event.mouseButton.button == Mouse::Left) {
+                // Tab键：在未开启编辑器时，在预览区选中图块
+                if (!showEditor && event.key.code == Keyboard::Tab) 
+                {
+                    // 计算预览区可用的图块列表
+                    vector<int> availablePieceIndices;
+                    vector<int> usedCounts = calculateUsedPieceCounts();
+                    
+                    for (size_t pcIndex = 0; pcIndex < pieceCounts.size(); pcIndex++) 
+                    {
+                        const auto& pc = pieceCounts[pcIndex];
+                        if (pc.count > 0) 
+                        {
+                            int availableCount = pc.count - usedCounts[pcIndex];
+                            if (availableCount > 0) 
+                            {
+                                // 找到对应的图块索引
+                                for (size_t i = 0; i < pieces.size(); i++) 
+                                {
+                                    if (pieces[i].id == pc.pieceId) 
+                                    {
+                                        // 添加该图块的每个可用实例
+                                        for (int instance = 0; instance < availableCount; instance++) 
+                                        {
+                                            availablePieceIndices.push_back((int)i);
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (!availablePieceIndices.empty()) 
+                    {
+                        bool shiftPressed = Keyboard::isKeyPressed(Keyboard::LShift) || 
+                                           Keyboard::isKeyPressed(Keyboard::RShift);
+                        
+                        // 如果还没有选中（第一次按Tab键），默认选中第一个
+                        if (previewSelectedIndex < 0) 
+                        {
+                            previewSelectedIndex = 0;
+                        } else if (shiftPressed) 
+                        {
+                            // Shift+Tab：反向切换（向前）
+                            if (previewSelectedIndex <= 0) 
+                            {
+                                previewSelectedIndex = (int)availablePieceIndices.size() - 1;
+                            } else 
+                            {
+                                previewSelectedIndex--;
+                            }
+                        } else 
+                        {
+                            // Tab：正向切换（向后）
+                            if (previewSelectedIndex >= (int)availablePieceIndices.size() - 1) 
+                            {
+                                previewSelectedIndex = 0;
+                            } else 
+                            {
+                                previewSelectedIndex++;
+                            }
+                        }
+                        
+                        // 设置选中的图块信息
+                        int selectedPieceIdx = availablePieceIndices[previewSelectedIndex];
+                        keyboardPlacePieceId = pieces[selectedPieceIdx].id;
+                        
+                        // 找到对应的pieceCounts条目，获取角度设置
+                        for (const auto& pc : pieceCounts) 
+                        {
+                            if (pc.pieceId == keyboardPlacePieceId) 
+                            {
+                                keyboardPlaceShapeIndex = pc.currentShapeIndex;
+                                if (keyboardPlaceShapeIndex < 0 || keyboardPlaceShapeIndex >= (int)pieces[selectedPieceIdx].shapes.size()) 
+                                {
+                                    keyboardPlaceShapeIndex = 0;
+                                }
+                                break;
+                            }
+                        }
+                        
+                        // 初始化放置位置（游戏板中心）
+                        keyboardPlaceRow = BOARD_SIZE / 2;
+                        keyboardPlaceCol = BOARD_SIZE / 2;
+                    }
+                }
+                
+                // WASD键：在游戏板上移动准备放置的图块（只在未开启编辑器且有选中图块时有效）
+                if (!showEditor && previewSelectedIndex >= 0 && keyboardPlacePieceId >= 0) 
+                {
+                    if (event.key.code == Keyboard::W) 
+                    {
+                        // 上移
+                        if (keyboardPlaceRow > 0) 
+                        {
+                            keyboardPlaceRow--;
+                        }
+                    } else if (event.key.code == Keyboard::S) 
+                    {
+                        // 下移
+                        if (keyboardPlaceRow < BOARD_SIZE - 1) 
+                        {
+                            keyboardPlaceRow++;
+                        }
+                    } else if (event.key.code == Keyboard::A) 
+                    {
+                        // 左移
+                        if (keyboardPlaceCol > 0) 
+                        {
+                            keyboardPlaceCol--;
+                        }
+                    } else if (event.key.code == Keyboard::D) 
+                    {
+                        // 右移
+                        if (keyboardPlaceCol < BOARD_SIZE - 1) 
+                        {
+                            keyboardPlaceCol++;
+                        }
+                    } else if (event.key.code == Keyboard::Space) 
+                    {
+                        // 放下图块
+                        // 找到对应的图块定义
+                        const Piece* piece = nullptr;
+                        for (const auto& p : pieces) 
+                        {
+                            if (p.id == keyboardPlacePieceId) 
+                            {
+                                piece = &p;
+                                break;
+                            }
+                        }
+                        
+                        if (piece && keyboardPlaceShapeIndex >= 0 && 
+                            keyboardPlaceShapeIndex < (int)piece->shapes.size()) 
+                        {
+                            const auto& shape = piece->shapes[keyboardPlaceShapeIndex];
+                            
+                            // 计算图块的边界（用于计算基准点）
+                            int minRow = shape[0].first, maxRow = shape[0].first;
+                            int minCol = shape[0].second, maxCol = shape[0].second;
+                            for (const auto& cell : shape) 
+                            {
+                                minRow = min(minRow, cell.first);
+                                maxRow = max(maxRow, cell.first);
+                                minCol = min(minCol, cell.second);
+                                maxCol = max(maxCol, cell.second);
+                            }
+                            
+                            // 计算基准点（确保图块在游戏板内）
+                            int baseRow = keyboardPlaceRow - minRow;
+                            int baseCol = keyboardPlaceCol - minCol;
+                            
+                            // 检查是否可以放置
+                            if (baseRow >= 0 && baseRow < BOARD_SIZE && 
+                                baseCol >= 0 && baseCol < BOARD_SIZE && 
+                                canPlace(shape, baseRow, baseCol)) 
+                            {
+                                // 找到对应的pieceCounts条目，分配tempId
+                                int tempId = -1;
+                                for (auto& pc : pieceCounts) 
+                                {
+                                    if (pc.pieceId == keyboardPlacePieceId) 
+                                    {
+                                        tempId = nextTempId++;
+                                        break;
+                                    }
+                                }
+                                
+                                if (tempId >= 0) 
+                                {
+                                    // 放置图块
+                                    placePiece(shape, baseRow, baseCol, tempId);
+                                    
+                                    // 重置选中状态
+                                    previewSelectedIndex = -1;
+                                    keyboardPlaceRow = -1;
+                                    keyboardPlaceCol = -1;
+                                    keyboardPlacePieceId = -1;
+                                    keyboardPlaceShapeIndex = -1;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Delete键：清空游戏板
+                if (event.key.code == Keyboard::Delete) 
+                {
+                    // 如果正在显示解，先切换到编辑模式
+                    if (showSolution) 
+                    {
+                        lock_guard<mutex> lock(boardMutex);
+                        for (int i = 0; i < BOARD_SIZE; i++) 
+                        {
+                            for (int j = 0; j < BOARD_SIZE; j++) 
+                            {
+                                board[i][j] = solutionBoard[i][j];
+                            }
+                        }
+                        showSolution = false;
+                    }
+                    
+                    // 清空游戏板
+                    for (int i = 0; i < BOARD_SIZE; i++) 
+                    {
+                        for (int j = 0; j < BOARD_SIZE; j++) 
+                        {
+                            board[i][j] = 0;
+                        }
+                    }
+                }
+                
+                // Backspace键：取下最晚放置在游戏板上的图块
+                if (event.key.code == Keyboard::Backspace) 
+                {
+                    // 如果正在显示解，先切换到编辑模式
+                    if (showSolution) 
+                    {
+                        lock_guard<mutex> lock(boardMutex);
+                        for (int i = 0; i < BOARD_SIZE; i++) 
+                        {
+                            for (int j = 0; j < BOARD_SIZE; j++) 
+                            {
+                                board[i][j] = solutionBoard[i][j];
+                            }
+                        }
+                        showSolution = false;
+                    }
+                    
+                    // 找到所有图块的tempId，找到最大的（最晚放置的）
+                    int maxTempId = -1;
+                    for (int i = 0; i < BOARD_SIZE; i++) 
+                    {
+                        for (int j = 0; j < BOARD_SIZE; j++) 
+                        {
+                            if (board[i][j] != 0 && board[i][j] > maxTempId) 
+                            {
+                                maxTempId = board[i][j];
+                            }
+                        }
+                    }
+                    
+                    // 如果找到了图块，移除它
+                    if (maxTempId > 0) 
+                    {
+                        // 找到这个图块的形状和位置
+                        const Piece* foundPiece = nullptr;
+                        int foundShapeIndex = -1;
+                        int baseRow = -1, baseCol = -1;
+                        
+                        // 首先尝试通过pieceCounts查找
+                        int pieceId = -1;
+                        for (const auto& pc : pieceCounts) 
+                        {
+                            if (pc.tempId == maxTempId) 
+                            {
+                                pieceId = pc.pieceId;
+                                break;
+                            }
+                        }
+                        
+                        // 如果通过pieceCounts找不到，尝试通过形状匹配
+                        if (pieceId >= 0) 
+                        {
+                            for (const auto& p : pieces) 
+                            {
+                                if (p.id == pieceId) 
+                                {
+                                    foundPiece = &p;
+                                    // 找到当前使用的形状
+                                    for (const auto& pc : pieceCounts) 
+                                    {
+                                        if (pc.pieceId == pieceId && pc.tempId == maxTempId) 
+                                        {
+                                            foundShapeIndex = pc.currentShapeIndex;
+                                            if (foundShapeIndex < 0 || foundShapeIndex >= (int)p.shapes.size()) 
+                                            {
+                                                foundShapeIndex = 0;
+                                            }
+                                            break;
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        // 如果还没找到，尝试通过形状匹配
+                        if (!foundPiece) 
+                        {
+                            // 找到包含maxTempId的单元格
+                            for (int i = 0; i < BOARD_SIZE; i++) 
+                            {
+                                for (int j = 0; j < BOARD_SIZE; j++) 
+                                {
+                                    if (board[i][j] == maxTempId) 
+                                    {
+                                        // 尝试匹配所有图块类型
+                                        for (const auto& p : pieces) 
+                                        {
+                                            for (size_t s = 0; s < p.shapes.size(); s++) 
+                                            {
+                                                const auto& testShape = p.shapes[s];
+                                                // 尝试将当前单元格作为形状的一部分
+                                                for (const auto& cellPos : testShape) 
+                                                {
+                                                    int tryBaseRow = i - cellPos.first;
+                                                    int tryBaseCol = j - cellPos.second;
+                                                    if (tryBaseRow < 0 || tryBaseCol < 0) continue;
+                                                    
+                                                    // 检查这个基础位置是否匹配整个形状
+                                                    bool matches = true;
+                                                    int matchedCells = 0;
+                                                    for (const auto& checkCell : testShape) 
+                                                    {
+                                                        int checkRow = tryBaseRow + checkCell.first;
+                                                        int checkCol = tryBaseCol + checkCell.second;
+                                                        if (checkRow < 0 || checkRow >= BOARD_SIZE ||
+                                                            checkCol < 0 || checkCol >= BOARD_SIZE ||
+                                                            board[checkRow][checkCol] != maxTempId) 
+                                                        {
+                                                            matches = false;
+                                                            break;
+                                                        }
+                                                        matchedCells++;
+                                                    }
+                                                    
+                                                    // 确保匹配的单元格数量等于形状大小
+                                                    if (matches && matchedCells == (int)testShape.size()) 
+                                                    {
+                                                        foundPiece = &p;
+                                                        foundShapeIndex = (int)s;
+                                                        baseRow = tryBaseRow;
+                                                        baseCol = tryBaseCol;
+                                                        break;
+                                                    }
+                                                }
+                                                if (foundPiece) break;
+                                            }
+                                            if (foundPiece) break;
+                                        }
+                                        if (foundPiece) break;
+                                    }
+                                }
+                                if (foundPiece) break;
+                            }
+                        } else 
+                        {
+                            // 如果通过pieceCounts找到了，需要找到图块的位置
+                            for (int i = 0; i < BOARD_SIZE; i++) 
+                            {
+                                for (int j = 0; j < BOARD_SIZE; j++) 
+                                {
+                                    if (board[i][j] == maxTempId) 
+                                    {
+                                        const auto& shape = foundPiece->shapes[foundShapeIndex];
+                                        // 尝试将当前单元格作为形状的一部分
+                                        for (const auto& cellPos : shape) 
+                                        {
+                                            int tryBaseRow = i - cellPos.first;
+                                            int tryBaseCol = j - cellPos.second;
+                                            if (tryBaseRow < 0 || tryBaseCol < 0) continue;
+                                            
+                                            // 检查这个基础位置是否匹配整个形状
+                                            bool matches = true;
+                                            int matchedCells = 0;
+                                            for (const auto& checkCell : shape) 
+                                            {
+                                                int checkRow = tryBaseRow + checkCell.first;
+                                                int checkCol = tryBaseCol + checkCell.second;
+                                                if (checkRow < 0 || checkRow >= BOARD_SIZE ||
+                                                    checkCol < 0 || checkCol >= BOARD_SIZE ||
+                                                    board[checkRow][checkCol] != maxTempId) 
+                                                {
+                                                    matches = false;
+                                                    break;
+                                                }
+                                                matchedCells++;
+                                            }
+                                            
+                                            // 确保匹配的单元格数量等于形状大小
+                                            if (matches && matchedCells == (int)shape.size()) 
+                                            {
+                                                baseRow = tryBaseRow;
+                                                baseCol = tryBaseCol;
+                                                break;
+                                            }
+                                        }
+                                        if (baseRow >= 0) break;
+                                    }
+                                }
+                                if (baseRow >= 0) break;
+                            }
+                        }
+                        
+                        // 如果找到了图块，移除它
+                        if (foundPiece && foundShapeIndex >= 0 && 
+                            foundShapeIndex < (int)foundPiece->shapes.size() && 
+                            baseRow >= 0 && baseCol >= 0) 
+                        {
+                            const auto& shape = foundPiece->shapes[foundShapeIndex];
+                            removePiece(shape, baseRow, baseCol);
+                        }
+                    }
+                }
+                
+                // 编辑器快捷键（只在编辑器打开时有效）
+                if (showEditor) 
+                {
+                    // Tab键：在图块列表中循环切换选中图块
+                    // Shift+Tab：反向切换
+                    if (event.key.code == Keyboard::Tab) 
+                    {
+                        if (!pieces.empty()) {
+                            bool shiftPressed = Keyboard::isKeyPressed(Keyboard::LShift) || 
+                                               Keyboard::isKeyPressed(Keyboard::RShift);
+                            
+                            if (shiftPressed) {
+                                // Shift+Tab：反向切换（向前）
+                                if (selectedPieceType <= 0) {
+                                    // 如果当前没有选中或选中第一个，切换到最后一个
+                                    selectedPieceType = (int)pieces.size() - 1;
+                                    previewPieceType = selectedPieceType;
+                                } else {
+                                    // 切换到上一个图块
+                                    selectedPieceType--;
+                                    previewPieceType = selectedPieceType;
+                                }
+                            } else {
+                                // Tab：正向切换（向后）
+                                if (selectedPieceType < 0 || selectedPieceType >= (int)pieces.size() - 1) {
+                                    // 如果当前没有选中或选中最后一个，切换到第一个
+                                    selectedPieceType = 0;
+                                    previewPieceType = 0;
+                                } else {
+                                    // 切换到下一个图块
+                                    selectedPieceType++;
+                                    previewPieceType = selectedPieceType;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 减号键：减少选中图块的数量
+                    if (event.key.code == Keyboard::Subtract || event.key.code == Keyboard::Dash) 
+                    {
+                        if (selectedPieceType >= 0 && selectedPieceType < (int)pieces.size()) {
+                            for (auto& pc : pieceCounts) 
+                            {
+                                if (pc.pieceId == pieces[selectedPieceType].id && pc.count > 0) 
+                                {
+                                    int oldCount = pc.count;
+                                    pc.count--;
+                                    
+                                    // 如果数量减少，移除棋盘上多余的实例
+                                    if (oldCount > pc.count) 
+                                    {
+                                        removeExcessInstances(pc.pieceId, pc.count);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 加号键：增加选中图块的数量
+                    if (event.key.code == Keyboard::Add || event.key.code == Keyboard::Equal) 
+                    {
+                        if (selectedPieceType >= 0 && selectedPieceType < (int)pieces.size()) {
+                            for (auto& pc : pieceCounts) 
+                            {
+                                if (pc.pieceId == pieces[selectedPieceType].id) 
+                                {
+                                    pc.count++;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 方向键左：减少角度（等同鼠标按"<"）
+                    if (event.key.code == Keyboard::Left) 
+                    {
+                        if (selectedPieceType >= 0 && selectedPieceType < (int)pieces.size()) {
+                            for (auto& pc : pieceCounts) 
+                            {
+                                if (pc.pieceId == pieces[selectedPieceType].id) 
+                                {
+                                    if (pc.currentShapeIndex > 0) 
+                                    {
+                                        pc.currentShapeIndex--;
+                                    } else 
+                                    {
+                                        // 循环到最后一个角度
+                                        if (!pieces[selectedPieceType].shapes.empty()) 
+                                        {
+                                            pc.currentShapeIndex = (int)pieces[selectedPieceType].shapes.size() - 1;
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 方向键右：增加角度（等同鼠标按">"）
+                    if (event.key.code == Keyboard::Right) 
+                    {
+                        if (selectedPieceType >= 0 && selectedPieceType < (int)pieces.size()) {
+                            for (auto& pc : pieceCounts) 
+                            {
+                                if (pc.pieceId == pieces[selectedPieceType].id) 
+                                {
+                                    if (!pieces[selectedPieceType].shapes.empty()) 
+                                    {
+                                        if (pc.currentShapeIndex < (int)pieces[selectedPieceType].shapes.size() - 1) 
+                                        {
+                                            pc.currentShapeIndex++;
+                                        } else 
+                                        {
+                                            // 循环到第一个角度
+                                            pc.currentShapeIndex = 0;
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Enter键：确认编辑器修改（等同鼠标点击确认按钮）
+                    if (event.key.code == Keyboard::Return || event.key.code == Keyboard::Enter) 
+                    {
+                        // 确认修改，关闭编辑器并清空游戏板
+                        showEditor = false;
+                        clearOldTempIds();
+                        assignTempIds();
+                        for (int i = 0; i < BOARD_SIZE; i++) 
+                        {
+                            for (int j = 0; j < BOARD_SIZE; j++) 
+                            {
+                                board[i][j] = 0;
+                                solutionBoard[i][j] = 0;
+                            }
+                        }
+                        solutionFound = false;
+                        solved = false;
+                        showSolution = false;
+                        solving = false;
+                        solveTime = 0.0f;
+                        solveTimeout = false;
+                        // 注意：不在这里关闭求解线程，让用户手动触发求解
+                        // 如果求解线程正在运行，用户可以通过点击求解按钮来重新开始
+                    }
+                }
+            }
+            
+            // 鼠标事件处理
+            if (event.type == Event::MouseButtonPressed)
+        {
+                mousePos = Mouse::getPosition(window);
+                int offsetX = 50;
+                int offsetY = 50;
+                
+                if (event.mouseButton.button == Mouse::Left) 
+                {
+                    mouseLeftPressed = true;
+                    
                 mousePos = Mouse::getPosition(window);  // 更新鼠标位置
                 int offsetX = 50;
                 int offsetY = 50;
-                // 按钮位置与drawBoard中一致
+                    
+                    // 先检查是否点击在自动求解按钮上（优先级最高）
                 int buttonX = offsetX + BOARD_SIZE * CELL_SIZE + 30;
                 int buttonY = offsetY;  // 直接放在顶部
                 int buttonWidth = 150;
                 int buttonHeight = 40;
                 
-                if (mousePos.x >= buttonX && mousePos.x < buttonX + buttonWidth &&
-                    mousePos.y >= buttonY && mousePos.y < buttonY + buttonHeight) {
-                    if (solutionFound && !solving) {
+                    bool clickedOnSolveButton = (mousePos.x >= buttonX && mousePos.x < buttonX + buttonWidth &&
+                                                 mousePos.y >= buttonY && mousePos.y < buttonY + buttonHeight);
+                    
+                    if (clickedOnSolveButton) 
+                    {
+                        if (solutionFound && !solving)
+                        {
                         // 如果已找到解且不在求解中，切换显示
                         showSolution = !showSolution;
-                    } else if (!solving) {
+                        } else if (!solving)
+                        {
                         // 开始自动求解（允许多次求解）
+                            // 确保使用最新的配置：如果编辑器打开，先确保配置已更新
+                            // 注意：用户在编辑器中修改配置时，pieceCounts已经被直接更新了
+                            // 但为了确保一致性，我们在求解前确保tempId已正确分配
+                            if (showEditor) {
+                                // 如果编辑器打开，先确保tempId已正确分配
+                                clearOldTempIds();
+                                assignTempIds();
+                            }
+                            
                         solving = true;
                         solutionFound = false;
                         solved = false;
@@ -2968,225 +4163,153 @@ int main() {
                         solveCheckCount = 0;  // 重置求解调用计数器
                         estimatedSolveTime = estimateSolveTime(pieceCounts);  // 预估求解时间
                         solveTimer.restart();  // 开始计时
-                        // 清空游戏板
-                        for (int i = 0; i < BOARD_SIZE; i++) {
-                            for (int j = 0; j < BOARD_SIZE; j++) {
-                                board[i][j] = 0;
+                            
+                            // 如果之前处于显示解模式，先切换到编辑模式，允许用户操作
+                            // 这样用户在求解开始前可以继续操作游戏板
+                            if (showSolution) 
+                            {
+                                // 将solutionBoard复制到board，允许用户编辑
+                                lock_guard<mutex> lock(boardMutex);
+                                for (int i = 0; i < BOARD_SIZE; i++) 
+                                {
+                                    for (int j = 0; j < BOARD_SIZE; j++) 
+                                    {
+                                        board[i][j] = solutionBoard[i][j];
                             }
                         }
+                                showSolution = false;  // 切换到编辑模式
+                            }
+                            
+                            showSolution = true;  // 开始显示求解过程
                         // 等待之前的线程结束（如果存在）
-                        if (solveThread && solveThread->joinable()) {
+                            if (solveThread && solveThread->joinable()) 
+                            {
                             solveThread->join();
                             delete solveThread;
                             solveThread = nullptr;
                         }
-                        solveThread = new thread([&]() {
+                            // 清空游戏板（在等待线程结束后，不需要锁，因为不会有其他线程访问）
+                            for (int i = 0; i < BOARD_SIZE; i++) 
+                            {
+                                for (int j = 0; j < BOARD_SIZE; j++) 
+                                {
+                                    board[i][j] = 0;
+                                }
+        }
+                            solveThread = new thread([&]() 
+                            {
+                                // 初始化最好的成果（不需要锁，因为bestBoard是求解线程专用的）
+                                bestFilledCells = 0;
+                                for (int i = 0; i < BOARD_SIZE; i++) 
+                                {
+                                    for (int j = 0; j < BOARD_SIZE; j++) 
+                                    {
+                                        bestBoard[i][j] = 0;
+                            }
+                        }
+                                
+                                // 创建pieceCounts的深拷贝，确保求解使用的图块数量与求解开始时一致
+                                // 注意：这里必须捕获当前的pieceCounts，包括用户修改后的配置
+                                vector<PieceCount> countsCopy;
+                                countsCopy.reserve(pieceCounts.size());
+                                for (const auto& pc : pieceCounts) {
+                                    countsCopy.push_back(pc);  // 深拷贝，包括count和currentShapeIndex
+                                }
+                                
+                                // 在求解过程中，只在需要访问board时获取锁
+                                // solve函数内部会直接访问board，所以需要在solve调用前后使用锁
+                                // 但是，solve函数运行时间很长，如果一直持有锁会导致UI卡死
+                                // 解决方案：solve函数内部在访问board时获取锁，而不是在整个求解过程中持有锁
+                                // 但是，solve函数是递归的，频繁获取/释放锁会影响性能
+                                // 更好的方案：使用局部board副本进行求解，求解完成后再复制回board
+                                
+                                // 创建board的副本用于求解
+                                vector<vector<int>> solveBoard(BOARD_SIZE, vector<int>(BOARD_SIZE, 0));
+                                
+                                // 在estimatedSolveTime秒内求解（使用局部board副本）
+                                // 注意：solve函数访问的是全局board，需要修改为使用局部副本
+                                // 暂时先使用全局board，但只在求解完成时获取锁来更新solutionBoard
+                                bool result = false;
+                                {
+                                    // 只在初始化时获取锁，清空board
                             lock_guard<mutex> lock(boardMutex);
-                            // 初始化最好的成果
-                            bestFilledCells = 0;
-                            for (int i = 0; i < BOARD_SIZE; i++) {
-                                for (int j = 0; j < BOARD_SIZE; j++) {
-                                    bestBoard[i][j] = 0;
-                                }
-                            }
-                            
-                            // 创建pieceCounts的副本，确保求解使用的图块数量与求解开始时一致
-                            vector<PieceCount> countsCopy = pieceCounts;
-                            // 在estimatedSolveTime秒内求解
-                            if (solve(0, countsCopy)) {
-                                solutionBoard = board;
-                                solutionFound = true;
-                                solved = true;
-                            } else {
-                                solved = false;
-                                // 如果没有找到完整解，显示最好的成果
-                                if (bestFilledCells > 0) {
-                                    solutionBoard = bestBoard;
-                                    solutionFound = true;  // 标记为找到部分解，可以显示
-                                } else {
-                                    solutionFound = false;
-                                }
-                                if (solveTimeout) {
-                                    // 超时了
-                                    solved = false;
-                                }
-                            }
-                            solving = false;
-                            solveTime = solveTimer.getElapsedTime().asSeconds();  // 记录求解时间
-                        });
-                        solveThread->detach();
-                    }
-                }
-                
-                // 处理测试用例1按钮点击
-                int testButton1X = buttonX + buttonWidth + 10;
-                if (mousePos.x >= testButton1X && mousePos.x < testButton1X + buttonWidth &&
-                    mousePos.y >= buttonY && mousePos.y < buttonY + buttonHeight) {
-                    if (!solving) {
-                        // 设置测试用例1：4个cross和16个1x1
-                        setTestCase1();
-                        // 清空游戏板
-                        for (int i = 0; i < BOARD_SIZE; i++) {
-                            for (int j = 0; j < BOARD_SIZE; j++) {
+                                    for (int i = 0; i < BOARD_SIZE; i++) 
+                                    {
+                                        for (int j = 0; j < BOARD_SIZE; j++) 
+                                        {
                                 board[i][j] = 0;
                             }
                         }
-                        // 清除之前的求解结果
-                        solutionFound = false;
-                        solved = false;
-                        showSolution = false;
-                        
-                        // 开始自动求解（使用优化后的算法）
-                        solving = true;
-                        solveTime = 0.0f;
-                        solveTimeout = false;
-                        solveCheckCount = 0;
-                        estimatedSolveTime = estimateSolveTime(pieceCounts);  // 预估求解时间
-                        solveTimer.restart();
-                        // 等待之前的线程结束（如果存在）
-                        if (solveThread && solveThread->joinable()) {
-                            solveThread->join();
-                            delete solveThread;
-                            solveThread = nullptr;
-                        }
-                        solveThread = new thread([&]() {
-                            lock_guard<mutex> lock(boardMutex);
-                            // 初始化最好的成果
-                            bestFilledCells = 0;
-                            for (int i = 0; i < BOARD_SIZE; i++) {
-                                for (int j = 0; j < BOARD_SIZE; j++) {
-                                    bestBoard[i][j] = 0;
                                 }
-                            }
-                            
-                            // 创建pieceCounts的副本，确保求解使用的图块数量与求解开始时一致
-                            vector<PieceCount> countsCopy = pieceCounts;
-                            // 在estimatedSolveTime秒内求解（使用优化后的算法）
-                            if (solve(0, countsCopy)) {
-                                solutionBoard = board;
+                                
+                                // 求解（不使用锁，直接访问board）
+                                // 为求解过程分配独立的tempId空间，从10000开始，避免与编辑器中的tempId冲突
+                                int nextTempIdForSolve = 10000;
+                                result = solve(0, countsCopy, nextTempIdForSolve);
+                                
+                                // 求解完成，更新solutionBoard（需要锁）
+                                {
+                            lock_guard<mutex> lock(boardMutex);
+                                    if (result)
+                                    {
+                                        // 找到完整解：使用bestBoard而不是board，确保显示的是最优解
+                                        // 注意：bestBoard中的tempId是从10000开始的，但绘制时需要能够识别
+                                        // countPiecesOnBoard函数现在通过pieceId和shapeIndex匹配，不依赖tempId
+                                        solutionBoard = bestBoard;
+                                        // 同时更新board，确保显示正确
+                                        board = bestBoard;
                                 solutionFound = true;
                                 solved = true;
-                                // 自动显示解
-                                showSolution = true;
-                            } else {
+                                        showSolution = true;  // 自动显示解
+                                    } else
+                                    {
                                 solved = false;
-                                // 如果没有找到完整解，显示最好的成果
-                                if (bestFilledCells > 0) {
-                                    solutionBoard = bestBoard;
-                                    solutionFound = true;  // 标记为找到部分解，可以显示
-                                    // 自动显示最好的成果
-                                    showSolution = true;
-                                } else {
-                                    solutionFound = false;
-                                    showSolution = false;
-                                }
-                                if (solveTimeout) {
+                                        // 如果没有找到完整解，显示最好的成果
+                                        if (bestFilledCells > 0) 
+                                        {
+                                            solutionBoard = bestBoard;
+                                            // 同时更新board，确保显示正确
+                                            board = bestBoard;
+                                            solutionFound = true;  // 标记为找到部分解，可以显示
+                                            showSolution = true;  // 自动显示部分解
+                                        } else
+                                        {
+                                            solutionFound = false;
+                                            showSolution = false;
+                                        }
+                                        if (solveTimeout)
+                                        {
                                     // 超时了
                                     solved = false;
                                 }
                             }
+                                }
+                                
+                                // 求解完成，重置求解状态（不需要锁）
                             solving = false;
-                            solveTime = solveTimer.getElapsedTime().asSeconds();
+                                solveTime = solveTimer.getElapsedTime().asSeconds();  // 记录求解时间
                         });
                         solveThread->detach();
                     }
-                }
-                
-                // 处理测试用例2按钮点击
-                int testButton2X = testButton1X + buttonWidth + 10;
-                if (mousePos.x >= testButton2X && mousePos.x < testButton2X + buttonWidth &&
-                    mousePos.y >= buttonY && mousePos.y < buttonY + buttonHeight) {
-                    if (!solving) {
-                        // 设置测试用例2：3个L-shape_0度，3个L-shape_180度，1个L-shape_90度，1个L-shape_270度，4个1x1
-                        setTestCase2();
-                        // 清空游戏板
-                        for (int i = 0; i < BOARD_SIZE; i++) {
-                            for (int j = 0; j < BOARD_SIZE; j++) {
-                                board[i][j] = 0;
-                            }
-                        }
-                        // 清除之前的求解结果
-                        solutionFound = false;
-                        solved = false;
-                        showSolution = false;
-                        
-                        // 开始自动求解（使用优化后的算法）
-                        solving = true;
-                        solveTime = 0.0f;
-                        solveTimeout = false;
-                        solveCheckCount = 0;
-                        estimatedSolveTime = estimateSolveTime(pieceCounts);  // 预估求解时间
-                        solveTimer.restart();
-                        // 等待之前的线程结束（如果存在）
-                        if (solveThread && solveThread->joinable()) {
-                            solveThread->join();
-                            delete solveThread;
-                            solveThread = nullptr;
-                        }
-                        solveThread = new thread([&]() {
-                            lock_guard<mutex> lock(boardMutex);
-                            // 初始化最好的成果
-                            bestFilledCells = 0;
-                            for (int i = 0; i < BOARD_SIZE; i++) {
-                                for (int j = 0; j < BOARD_SIZE; j++) {
-                                    bestBoard[i][j] = 0;
-                                }
-                            }
-                            
-                            // 创建pieceCounts的副本，确保求解使用的图块数量与求解开始时一致
-                            vector<PieceCount> countsCopy = pieceCounts;
-                            // 在estimatedSolveTime秒内求解（使用优化后的算法）
-                            if (solve(0, countsCopy)) {
-                                solutionBoard = board;
-                                solutionFound = true;
-                                solved = true;
-                                // 自动显示解
-                                showSolution = true;
-                            } else {
-                                solved = false;
-                                // 如果没有找到完整解，显示最好的成果
-                                if (bestFilledCells > 0) {
-                                    solutionBoard = bestBoard;
-                                    solutionFound = true;  // 标记为找到部分解，可以显示
-                                    // 自动显示最好的成果
-                                    showSolution = true;
-                                } else {
-                                    solutionFound = false;
-                                    showSolution = false;
-                                }
-                                if (solveTimeout) {
-                                    // 超时了
-                                    solved = false;
-                                }
-                            }
-                            solving = false;
-                            solveTime = solveTimer.getElapsedTime().asSeconds();
-                        });
-                        solveThread->detach();
+                        // 按钮点击后，不再处理其他鼠标事件，直接跳过后续处理
+                        continue;  // 跳过后续处理，继续处理下一个事件
                     }
-                }
-            }
-            
-            // 鼠标事件处理
-            if (event.type == Event::MouseButtonPressed) {
-                mousePos = Mouse::getPosition(window);
-                int offsetX = 50;
-                int offsetY = 50;
-                
-                if (event.mouseButton.button == Mouse::Left) {
-                    mouseLeftPressed = true;
                     
-                    mousePos = Mouse::getPosition(window);  // 更新鼠标位置
-                    int offsetX = 50;
-                    int offsetY = 50;
-                    
+                    // 没有点击按钮，继续处理其他鼠标事件
                     // 先检查是否点击在编辑器区域（如果编辑器打开，优先处理编辑器事件）
                     bool clickedInEditor = false;
-                    if (showEditor) {
+                    if (showEditor) 
+                    {
                         int editorX = editorDrag.editorX;
                         int editorY = editorDrag.editorY;
                         int editorWidth = WINDOW_WIDTH - 100;
-                        int editorHeight = min(400, WINDOW_HEIGHT - editorY - 50);
+                        // 编辑器高度应该足够大，以包含所有内容
+                        // 图块列表、示意图、按钮等，至少需要600像素
+                        // 使用min确保不超过窗口高度，但至少600像素
+                        int editorHeight = min(600, WINDOW_HEIGHT - editorY - 50);
+                        if (editorHeight < 600) {
+                            editorHeight = 600;  // 确保至少600像素
+                        }
                         
                         clickedInEditor = (mousePos.x >= editorX && mousePos.x < editorX + editorWidth &&
                                           mousePos.y >= editorY && mousePos.y < editorY + editorHeight);
@@ -3202,7 +4325,8 @@ int main() {
                     // 只有当编辑器未打开，或者点击不在编辑器内时，才检查预览区
                     if (!clickedInEditor && 
                         mousePos.x >= previewX && mousePos.x < previewX + previewWidth &&
-                        mousePos.y >= previewY + 40 && mousePos.y < previewY + previewHeight) {
+                        mousePos.y >= previewY + 40 && mousePos.y < previewY + previewHeight) 
+                    {
                         // 计算点击的图块索引（需要与绘制逻辑完全一致）
                         int currentY = previewY + 40;  // 与绘制时使用相同的起始Y坐标
                         int itemsPerRow = 8;
@@ -3213,28 +4337,47 @@ int main() {
                         vector<int> usedCounts = calculateUsedPieceCounts();
                         
                         // 遍历所有图块，精确检测鼠标点击在哪个图块上
+                        // 改进：遍历pieceCounts而不是pieces，确保与绘制逻辑一致
                         int displayIndex = 0;
                         int foundPieceIndex = -1;
+                        int foundPcIndex = -1;  // 保存找到的pieceCounts索引
                         int foundInstanceIndex = -1;
                         int foundPieceActualX = -1, foundPieceActualY = -1;  // 保存点击的图块实际绘制位置
                         int foundPieceX = -1, foundPieceY = -1;  // 保存点击的图块位置（兼容旧代码）
                         int foundPieceCellSize = -1;  // 保存图块的cellSize
                         int foundPieceMinRow = -1, foundPieceMinCol = -1;  // 保存图块的边界
-                        for (size_t i = 0; i < pieces.size(); i++) {
-                            // 获取该图块类型的总数量
-                            int totalCount = 0;
-                            for (const auto& pc : pieceCounts) {
-                                if (pc.pieceId == pieces[i].id) {
-                                    totalCount = pc.count;
+                        for (size_t pcIndex = 0; pcIndex < pieceCounts.size(); pcIndex++) 
+                        {
+                            const auto& pc = pieceCounts[pcIndex];
+                            
+                            // 找到对应的图块定义
+                            const Piece* piece = nullptr;
+                            for (size_t i = 0; i < pieces.size(); i++) 
+                            {
+                                if (pieces[i].id == pc.pieceId) 
+                                {
+                                    piece = &pieces[i];
+                                    foundPieceIndex = i;
                                     break;
                                 }
                             }
                             
+                            if (!piece || pc.count == 0) continue;
+                            
                             // 计算可用数量（总数量 - 已使用数量）
-                            int availableCount = totalCount - usedCounts[i];
+                            // usedCounts现在按pieceCounts索引，所以直接使用pcIndex
+                            int availableCount = pc.count - usedCounts[pcIndex];
+                            
+                            // 获取该图块的角度设置（与绘制时相同）
+                            int shapeIndex = pc.currentShapeIndex;
+                            if (shapeIndex < 0 || shapeIndex >= (int)piece->shapes.size()) 
+                            {
+                                shapeIndex = 0;  // 如果索引无效，使用0度
+                            }
                             
                             // 检查该图块类型的每个实例
-                            for (int instance = 0; instance < availableCount; instance++) {
+                            for (int instance = 0; instance < availableCount; instance++) 
+                            {
                                 int col = (displayIndex % itemsPerRow);
                                 int row = (displayIndex / itemsPerRow);
                                 int x = previewX + 20 + col * (itemSize + spacing);
@@ -3242,12 +4385,14 @@ int main() {
                                 
                                 // 检查鼠标是否点击在这个图块的位置范围内
                                 // 使用与绘制时完全相同的逻辑来计算图块的实际绘制区域
-                                if (!pieces[i].shapes.empty()) {
-                                    const auto& shape = pieces[i].shapes[0];
+                                if (!piece->shapes.empty()) 
+                                {
+                                    const auto& shape = piece->shapes[shapeIndex];  // 使用正确的shapeIndex
                                     
                                     // 计算cellSize（与绘制时相同）
                                     int maxDim = 0;
-                                    for (const auto& cell : shape) {
+                                    for (const auto& cell : shape) 
+                                    {
                                         maxDim = max(maxDim, max(cell.first, cell.second));
                                     }
                                     int cellSize = maxDim > 0 ? itemSize / (maxDim + 1) : itemSize / 3;
@@ -3255,7 +4400,8 @@ int main() {
                                     // 计算图块的边界（与drawPieceShape中的逻辑相同）
                                     int minRow = shape[0].first, maxRow = shape[0].first;
                                     int minCol = shape[0].second, maxCol = shape[0].second;
-                                    for (const auto& cell : shape) {
+                                    for (const auto& cell : shape) 
+                                    {
                                         minRow = min(minRow, cell.first);
                                         maxRow = max(maxRow, cell.first);
                                         minCol = min(minCol, cell.second);
@@ -3270,21 +4416,26 @@ int main() {
                                     
                                     // 检查鼠标是否在这个图块的实际绘制区域内
                                     if (mousePos.x >= actualX && mousePos.x < actualX + shapeWidth &&
-                                        mousePos.y >= actualY && mousePos.y < actualY + shapeHeight) {
-                                        foundPieceIndex = i;
+                                        mousePos.y >= actualY && mousePos.y < actualY + shapeHeight)
+                                         {
+                                        foundPcIndex = pcIndex;
                                         foundInstanceIndex = instance;
                                         foundPieceX = actualX;  // 保存图块实际绘制区域的左上角
                                         foundPieceY = actualY;
+                                        foundPieceActualX = actualX;  // 保存图块实际绘制区域的左上角（用于计算dragOffset）
+                                        foundPieceActualY = actualY;
                                         foundPieceCellSize = cellSize;
                                         foundPieceMinRow = minRow;
                                         foundPieceMinCol = minCol;
                                         break;
                                     }
-                                } else {
+                                } else 
+                                {
                                     // 如果没有形状，使用itemSize作为点击区域
                                     if (mousePos.x >= x && mousePos.x < x + itemSize &&
-                                        mousePos.y >= y && mousePos.y < y + itemSize) {
-                                        foundPieceIndex = i;
+                                        mousePos.y >= y && mousePos.y < y + itemSize)
+                                         {
+                                        foundPcIndex = pcIndex;
                                         foundInstanceIndex = instance;
                                         break;
                                     }
@@ -3293,36 +4444,37 @@ int main() {
                                 displayIndex++;
                             }
                             
-                            if (foundPieceIndex >= 0) break;
+                            if (foundPcIndex >= 0) break;
                         }
                         
-                        if (foundPieceIndex >= 0 && foundPieceIndex < (int)pieces.size()) {
+                        if (foundPcIndex >= 0 && foundPieceIndex >= 0 && foundPieceIndex < (int)pieces.size()) 
+                        {
                             // 从预览区开始拖拽
-                            draggedPiece.pieceId = pieces[foundPieceIndex].id;
+                            const auto& pc = pieceCounts[foundPcIndex];
+                            draggedPiece.pieceId = pc.pieceId;
                             draggedPiece.originalRow = -1;  // 从预览区拖出，没有原位置
                             draggedPiece.originalCol = -1;
                             // 使用编辑器指定的角度（currentShapeIndex）
-                            draggedPiece.shapeIndex = 0;  // 默认值，会在下面更新
-                            for (const auto& pc : pieceCounts) {
-                                if (pc.pieceId == pieces[foundPieceIndex].id) {
-                                    draggedPiece.shapeIndex = pc.currentShapeIndex;
-                                    if (draggedPiece.shapeIndex < 0 || 
-                                        draggedPiece.shapeIndex >= (int)pieces[foundPieceIndex].shapes.size()) {
-                                        draggedPiece.shapeIndex = 0;  // 如果索引无效，使用0度
-                                    }
-                                    break;
-                                }
+                            draggedPiece.shapeIndex = pc.currentShapeIndex;
+                            if (draggedPiece.shapeIndex < 0 || 
+                                draggedPiece.shapeIndex >= (int)pieces[foundPieceIndex].shapes.size())
+                            {
+                                draggedPiece.shapeIndex = 0;  // 如果索引无效，使用0度
                             }
+                            // 为这个新实例分配一个唯一的tempId
+                            draggedPiece.tempId = nextTempId++;
                             draggedPiece.isDragging = true;
                             
                             // 计算拖拽偏移量：从预览区拖拽时，使用保存的图块实际绘制位置
                             // 这样可以避免在图块空白区域点击时计算错误
-                            if (foundPieceActualX >= 0 && foundPieceActualY >= 0) {
+                            if (foundPieceActualX >= 0 && foundPieceActualY >= 0) 
+                            {
                                 // 使用保存的图块实际绘制区域的左上角作为参考点
                                 // 鼠标相对于图块实际绘制区域的位置
                                 draggedPiece.dragOffset.x = mousePos.x - foundPieceActualX;
                                 draggedPiece.dragOffset.y = mousePos.y - foundPieceActualY;
-                            } else {
+                            } else 
+                            {
                                 // 回退：如果找不到位置信息，使用0
                                 draggedPiece.dragOffset.x = 0;
                                 draggedPiece.dragOffset.y = 0;
@@ -3331,19 +4483,24 @@ int main() {
                     }
                     
                     // 检查是否点击在游戏板上（如果点击在编辑器内，跳过游戏板检测）
-                    if (!clickedInEditor) {
+                    if (!clickedInEditor) 
+                    {
                     int boardX = mousePos.x - offsetX;
                     int boardY = mousePos.y - offsetY;
                     int col = boardX / CELL_SIZE;
                     int row = boardY / CELL_SIZE;
                     
-                    if (row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE) {
-                        // 如果正在显示解，且用户点击了图块，切换到编辑模式
-                        if (showSolution) {
+                        if (row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE) 
+                        {
+                            // 如果正在显示解，且用户点击了图块，切换到编辑模式
+                            if (showSolution) 
+                        {
                             // 将solutionBoard复制到board，允许用户编辑
                             lock_guard<mutex> lock(boardMutex);
-                            for (int i = 0; i < BOARD_SIZE; i++) {
-                                for (int j = 0; j < BOARD_SIZE; j++) {
+                            for (int i = 0; i < BOARD_SIZE; i++) 
+                            {
+                                for (int j = 0; j < BOARD_SIZE; j++) 
+                                {
                                     board[i][j] = solutionBoard[i][j];
                                 }
                             }
@@ -3351,23 +4508,41 @@ int main() {
                         }
                         
                         int cellValue = board[row][col];
-                        if (cellValue != 0) {
+                        if (cellValue != 0) 
+                        {
                             // 找到图块和形状（保持当前角度，不重置）
+                            // 通过tempId找到对应的pieceCounts条目，然后找到对应的piece
                             const Piece* clickedPiece = nullptr;
+                            int clickedPieceId = -1;
+                            for (const auto& pc : pieceCounts) 
+                            {
+                                if (pc.tempId == cellValue) 
+                                {
+                                    clickedPieceId = pc.pieceId;
+                                    break;
+                                }
+                            }
+                            
                             int clickedShapeIndex = 0;
                             int baseRow = -1, baseCol = -1;
                             int clickedCellInShapeRow = -1, clickedCellInShapeCol = -1;  // 点击位置在形状中的相对坐标
                             
-                            for (size_t i = 0; i < pieces.size(); i++) {
-                                if (pieces[i].id == cellValue) {
+                            if (clickedPieceId >= 0) 
+                            {
+                                for (size_t i = 0; i < pieces.size(); i++) 
+                                {
+                                    if (pieces[i].id == clickedPieceId) 
+                                    {
                                     clickedPiece = &pieces[i];
                                     // 找到当前使用的形状，通过尝试不同的基础位置来匹配
                                     // 对于L-shape和L-mirror等有多个旋转角度的图块，必须精确匹配正确的角度
-                                    for (size_t s = 0; s < pieces[i].shapes.size(); s++) {
+                                    for (size_t s = 0; s < pieces[i].shapes.size(); s++) 
+                                    {
                                         const auto& shape = pieces[i].shapes[s];
                                         
                                         // 找到形状中哪个cell对应点击位置
-                                        for (const auto& cell : shape) {
+                                        for (const auto& cell : shape) 
+                                        {
                                             // 尝试这个cell作为点击位置
                                             int tryBaseRow = row - cell.first;
                                             int tryBaseCol = col - cell.second;
@@ -3376,24 +4551,29 @@ int main() {
                                             // 必须所有单元格都匹配，且数量完全一致
                                             bool matches = true;
                                             int matchedCount = 0;
-                                            for (const auto& checkCell : shape) {
+                                            for (const auto& checkCell : shape) 
+                                            {
                                                 int checkRow = tryBaseRow + checkCell.first;
                                                 int checkCol = tryBaseCol + checkCell.second;
                                                 if (checkRow < 0 || checkRow >= BOARD_SIZE ||
-                                                    checkCol < 0 || checkCol >= BOARD_SIZE) {
+                                                    checkCol < 0 || checkCol >= BOARD_SIZE) 
+                                                {
                                                     matches = false;
                                                     break;
                                                 }
-                                                if (board[checkRow][checkCol] == cellValue) {
+                                                if (board[checkRow][checkCol] == cellValue) 
+                                                {
                                                     matchedCount++;
-                                                } else {
+                                                } else 
+                                                {
                                                     matches = false;
                                                     break;
                                                 }
                                             }
                                             
                                             // 必须完全匹配：所有单元格都匹配，且数量等于形状大小
-                                            if (matches && matchedCount == (int)shape.size()) {
+                                            if (matches && matchedCount == (int)shape.size()) 
+                                            {
                                                 draggedPiece.shapeIndex = s;  // 保持当前角度
                                                 clickedShapeIndex = s;
                                                 baseRow = tryBaseRow;
@@ -3411,9 +4591,11 @@ int main() {
                             }
                             
                             // 如果找到了图块的基础位置，开始拖拽
-                            if (baseRow >= 0 && baseCol >= 0) {
+                            if (clickedPiece && baseRow >= 0 && baseCol >= 0) 
+                            {
                                 // 开始拖拽游戏板上的图块
-                                draggedPiece.pieceId = cellValue;
+                                draggedPiece.pieceId = clickedPieceId;
+                                draggedPiece.tempId = cellValue;  // 从游戏板拖拽时，cellValue就是tempId
                                 draggedPiece.originalRow = baseRow;  // 使用基础位置，而不是点击位置
                                 draggedPiece.originalCol = baseCol;
                                 draggedPiece.isDragging = true;
@@ -3421,22 +4603,25 @@ int main() {
                                 // 计算拖拽偏移量：鼠标相对于点击的单元格的位置
                                 // 使用实际点击的单元格位置（clickedCellInShapeRow, clickedCellInShapeCol）
                                 // 而不是游戏板上的col和row，避免在图块空白区域点击时计算错误
-                                if (clickedCellInShapeRow >= 0 && clickedCellInShapeCol >= 0) {
+                                if (clickedCellInShapeRow >= 0 && clickedCellInShapeCol >= 0) 
+                                {
                                     // 计算点击的单元格在游戏板上的实际位置
                                     int clickedCellX = offsetX + (baseCol + clickedCellInShapeCol) * CELL_SIZE;
                                     int clickedCellY = offsetY + (baseRow + clickedCellInShapeRow) * CELL_SIZE;
                                     draggedPiece.dragOffset.x = mousePos.x - clickedCellX;
                                     draggedPiece.dragOffset.y = mousePos.y - clickedCellY;
-                                } else {
+                                } else 
+                                {
                                     // 回退：如果找不到点击的单元格，使用游戏板上的col和row
-                                    int clickedCellX = offsetX + col * CELL_SIZE;
-                                    int clickedCellY = offsetY + row * CELL_SIZE;
-                                    draggedPiece.dragOffset.x = mousePos.x - clickedCellX;
-                                    draggedPiece.dragOffset.y = mousePos.y - clickedCellY;
+                                int clickedCellX = offsetX + col * CELL_SIZE;
+                                int clickedCellY = offsetY + row * CELL_SIZE;
+                                draggedPiece.dragOffset.x = mousePos.x - clickedCellX;
+                                draggedPiece.dragOffset.y = mousePos.y - clickedCellY;
                                 }
                                 
                                 // 移除原位置的图块（只移除被选中的那个图块实例）
-                                if (clickedPiece && clickedShapeIndex < (int)clickedPiece->shapes.size()) {
+                                if (clickedPiece && clickedShapeIndex < (int)clickedPiece->shapes.size()) 
+                                {
                                     const auto& shape = clickedPiece->shapes[clickedShapeIndex];
                                     removePiece(shape, baseRow, baseCol);
                                 }
@@ -3446,134 +4631,205 @@ int main() {
                     }  // 关闭 !clickedInEditor 的if块
                     
                     // 检查是否点击在编辑器区域（处理编辑器内的交互）
-                    if (showEditor && clickedInEditor) {
+                    if (showEditor && clickedInEditor) 
+                    {
                         int editorX = editorDrag.editorX;
                         int editorY = editorDrag.editorY;
                         int editorWidth = WINDOW_WIDTH - 100;
-                        int editorHeight = min(400, WINDOW_HEIGHT - editorY - 50);
+                        // 编辑器高度应该足够大，以包含所有内容（与clickedInEditor计算保持一致）
+                        // 图块列表、示意图、按钮等，至少需要600像素
+                        // 使用min确保不超过窗口高度，但至少600像素
+                        int editorHeight = min(600, WINDOW_HEIGHT - editorY - 50);
+                        if (editorHeight < 600) {
+                            editorHeight = 600;  // 确保至少600像素
+                        }
+                        
                             // 检查是否点击在编辑器标题栏（可拖拽区域）
-                            if (mousePos.x >= editorX && mousePos.x < editorX + editorWidth &&
-                                mousePos.y >= editorY && mousePos.y < editorY + 50) {
+                        bool clickedInTitleBar = (mousePos.x >= editorX && mousePos.x < editorX + editorWidth &&
+                                                  mousePos.y >= editorY && mousePos.y < editorY + 50);
+                        if (clickedInTitleBar) 
+                        {
                                 editorDrag.isDragging = true;
                                 editorDrag.dragOffset.x = mousePos.x - editorX;
                                 editorDrag.dragOffset.y = mousePos.y - editorY;
-                            }
-                            
+                            // 点击标题栏时，不处理其他点击，直接返回
+                        } else {
+                            // 不在标题栏，处理编辑器内的其他点击
+                            // 使用与绘制时完全一致的坐标计算
                             int itemsPerRow = 5;
                             int itemWidth = 150;
                             int itemHeight = 80;
                             int startX = editorX + 20;
-                            int startY = editorY + 60;
+                            // 计算startY，与绘制时保持一致
+                            // 绘制时：currentY = editorY + 20，如果有字体则 currentY += 40
+                            // 所以 startY = editorY + 20（如果有字体则 + 40）
+                            int startY = editorY + 20;  // currentY的初始值
+                            bool fontAvailable = font.getInfo().family != "";
+                            if (fontAvailable) {
+                                startY += 40;  // 如果有字体，加上标题高度
+                            }
                             
                             // 计算右侧区域位置
                             int rightAreaX = startX + itemsPerRow * itemWidth + 40;
                             
-                            // 检查是否点击在图块列表区域
+                            // 先检查是否点击在图块列表区域（优先级最高，确保图块选择能正常工作）
                             bool clickedInPieceList = false;
-                            for (size_t i = 0; i < pieces.size(); i++) {
+                            for (size_t i = 0; i < pieces.size(); i++) 
+                            {
                                 int col = i % itemsPerRow;
                                 int row = i / itemsPerRow;
                                 int x = startX + col * itemWidth;
                                 int y = startY + row * itemHeight;
                                 
                                 if (mousePos.x >= x && mousePos.x < x + itemWidth &&
-                                    mousePos.y >= y && mousePos.y < y + itemHeight) {
-                                    selectedPieceType = i;
-                                    previewPieceType = i;
+                                    mousePos.y >= y && mousePos.y < y + itemHeight) 
+                                {
+                                    selectedPieceType = (int)i;
+                                    previewPieceType = (int)i;
                                     clickedInPieceList = true;
+                                    // 强制更新预览显示
                                     break;
                                 }
                             }
                             
-                            // 检查数量按钮（在右侧区域，不能穿透）
-                            if (selectedPieceType >= 0 && !clickedInPieceList) {
-                                int btnX = rightAreaX;
-                                // 预览区域高度固定为 EDITOR_PREVIEW_SIZE
-                                int btnY = startY + EDITOR_PREVIEW_SIZE + 30;
+                            // 如果没点击在图块列表，检查按钮点击
+                            if (!clickedInPieceList)
+                            {
+                                bool buttonClicked = false;
+                                // 使用与绘制时完全一致的坐标计算
+                                // 绘制时：rightAreaY = currentY = editorY + 20（如果有字体则 + 40）
+                                // 绘制时：rightCurrentY = rightAreaY，然后绘制预览区域后 rightCurrentY += previewAreaSize + 30
+                                // 所以数量按钮的Y坐标是 rightAreaY + previewAreaSize + 30
+                                int rightAreaY = startY;  // 与绘制时的rightAreaY对齐（startY已经包含了editorY和字体偏移）
+                                int previewAreaX = rightAreaX;  // 与绘制时的previewAreaX对齐
+                                int btnY = rightAreaY + EDITOR_PREVIEW_SIZE + 30;  // 数量按钮的Y坐标（与绘制时的rightCurrentY一致）
                                 
-                                // 减号按钮：减少数量，并移除棋盘上多余的实例
-                                if (mousePos.x >= btnX + 80 && mousePos.x < btnX + 110 &&
-                                    mousePos.y >= btnY && mousePos.y < btnY + 30) {
-                                    for (auto& pc : pieceCounts) {
-                                        if (pc.pieceId == pieces[selectedPieceType].id && pc.count > 0) {
+                                // 确认按钮（使用与绘制时一致的坐标）- 不需要选中图块就可以点击
+                                int confirmBtnX = previewAreaX + 35;
+                                int confirmBtnY = btnY + 100;  // btnY + 50 (数量区域高度) + 50 (角度区域高度) = btnY + 100
+                                if (mousePos.x >= confirmBtnX && mousePos.x < confirmBtnX + 120 &&
+                                    mousePos.y >= confirmBtnY && mousePos.y < confirmBtnY + 35) 
+                                {
+                                    // 确认修改，关闭编辑器并清空游戏板
+                                    showEditor = false;
+                                    clearOldTempIds();
+                                    assignTempIds();
+                                    for (int i = 0; i < BOARD_SIZE; i++) 
+                                    {
+                                        for (int j = 0; j < BOARD_SIZE; j++) 
+                                        {
+                                            board[i][j] = 0;
+                                            solutionBoard[i][j] = 0;
+                                        }
+                                    }
+                                    solutionFound = false;
+                                    solved = false;
+                                    showSolution = false;
+                                    solving = false;
+                                    solveTime = 0.0f;
+                                    solveTimeout = false;
+                                    // 注意：不在这里关闭求解线程，让用户手动触发求解
+                                    // 如果求解线程正在运行，用户可以通过点击求解按钮来重新开始
+                                    buttonClicked = true;
+                                }
+                                
+                                // 其他按钮需要选中图块才能操作
+                                if (!buttonClicked && selectedPieceType >= 0 && selectedPieceType < (int)pieces.size())
+                                {
+                                    // 减号按钮：减少数量（使用与绘制时一致的坐标）
+                                    // 注意：按钮高度是30，但绘制时使用的是30x30的按钮
+                                    if (mousePos.x >= previewAreaX + 80 && mousePos.x < previewAreaX + 110 &&
+                                        mousePos.y >= btnY && mousePos.y < btnY + 30) 
+                                    {
+                                        for (auto& pc : pieceCounts) 
+                                        {
+                                            if (pc.pieceId == pieces[selectedPieceType].id && pc.count > 0) 
+                                            {
                                             int oldCount = pc.count;
                                             pc.count--;
                                             
                                             // 如果数量减少，移除棋盘上多余的实例
-                                            if (oldCount > pc.count) {
+                                                if (oldCount > pc.count) 
+                                                {
                                                 removeExcessInstances(pc.pieceId, pc.count);
                                             }
+                                                buttonClicked = true;
                                             break;
                                         }
                                     }
                                 }
                                 
-                                // 加号按钮：增加数量（不需要从棋盘添加，因为用户可以手动放置）
-                                if (mousePos.x >= btnX + 160 && mousePos.x < btnX + 190 &&
-                                    mousePos.y >= btnY && mousePos.y < btnY + 30) {
-                                    for (auto& pc : pieceCounts) {
-                                        if (pc.pieceId == pieces[selectedPieceType].id) {
+                                    // 加号按钮：增加数量（使用与绘制时一致的坐标）
+                                    if (!buttonClicked && mousePos.x >= previewAreaX + 160 && mousePos.x < previewAreaX + 190 &&
+                                        mousePos.y >= btnY && mousePos.y < btnY + 30) 
+                                    {
+                                        for (auto& pc : pieceCounts) 
+                                        {
+                                            if (pc.pieceId == pieces[selectedPieceType].id) 
+                                            {
                                             pc.count++;
+                                                buttonClicked = true;
                                             break;
                                         }
                                     }
                                 }
                                 
-                                // 角度选择按钮（左箭头）
-                                if (mousePos.x >= btnX + 80 && mousePos.x < btnX + 110 &&
-                                    mousePos.y >= btnY + 50 && mousePos.y < btnY + 80) {
-                                    for (auto& pc : pieceCounts) {
-                                        if (pc.pieceId == pieces[selectedPieceType].id) {
-                                            if (pc.currentShapeIndex > 0) {
-                                                pc.currentShapeIndex--;
-                                            } else {
-                                                // 循环到最后一个角度
-                                                if (!pieces[selectedPieceType].shapes.empty()) {
-                                                    pc.currentShapeIndex = (int)pieces[selectedPieceType].shapes.size() - 1;
+                                    // 角度选择按钮（左箭头）（使用与绘制时一致的坐标）
+                                    int angleBtnY = btnY + 50;  // 角度按钮的Y坐标（数量区域高度50）
+                                    if (!buttonClicked && mousePos.x >= previewAreaX + 80 && mousePos.x < previewAreaX + 110 &&
+                                        mousePos.y >= angleBtnY && mousePos.y < angleBtnY + 30) 
+                                    {
+                                        for (auto& pc : pieceCounts) 
+                                        {
+                                            if (pc.pieceId == pieces[selectedPieceType].id) 
+                                            {
+                                                if (pc.currentShapeIndex > 0) 
+                                                {
+                                                    pc.currentShapeIndex--;
+                                                } else 
+                                                {
+                                                    // 循环到最后一个角度
+                                                    if (!pieces[selectedPieceType].shapes.empty()) 
+                                                    {
+                                                        pc.currentShapeIndex = (int)pieces[selectedPieceType].shapes.size() - 1;
+                                                    }
                                                 }
+                                                buttonClicked = true;
+                                                break;
                                             }
-                                            break;
                                         }
                                     }
-                                }
-                                
-                                // 角度选择按钮（右箭头）
-                                if (mousePos.x >= btnX + 180 && mousePos.x < btnX + 210 &&
-                                    mousePos.y >= btnY + 50 && mousePos.y < btnY + 80) {
-                                    for (auto& pc : pieceCounts) {
-                                        if (pc.pieceId == pieces[selectedPieceType].id) {
-                                            if (!pieces[selectedPieceType].shapes.empty()) {
-                                                if (pc.currentShapeIndex < (int)pieces[selectedPieceType].shapes.size() - 1) {
-                                                    pc.currentShapeIndex++;
-                                                } else {
-                                                    // 循环到第一个角度
-                                                    pc.currentShapeIndex = 0;
+                                    
+                                    // 角度选择按钮（右箭头）（使用与绘制时一致的坐标）
+                                    if (!buttonClicked && mousePos.x >= previewAreaX + 180 && mousePos.x < previewAreaX + 210 &&
+                                        mousePos.y >= angleBtnY && mousePos.y < angleBtnY + 30) 
+                                    {
+                                        for (auto& pc : pieceCounts) 
+                                        {
+                                            if (pc.pieceId == pieces[selectedPieceType].id) 
+                                            {
+                                                if (!pieces[selectedPieceType].shapes.empty()) 
+                                                {
+                                                    if (pc.currentShapeIndex < (int)pieces[selectedPieceType].shapes.size() - 1) 
+                                                    {
+                                                        pc.currentShapeIndex++;
+                                                    } else 
+                                                    {
+                                                        // 循环到第一个角度
+                                                        pc.currentShapeIndex = 0;
+                                                    }
                                                 }
+                                                buttonClicked = true;
+                                                break;
                                             }
-                                            break;
                                         }
                                     }
                                 }
-                                
-                                // 确认按钮
-                                if (mousePos.x >= btnX && mousePos.x < btnX + 120 &&
-                                    mousePos.y >= btnY + 100 && mousePos.y < btnY + 135) {
-                                    // 确认修改，关闭编辑器并清空游戏板（不自动求解）
-                                    showEditor = false;
-                                    // 清空游戏板
-                                    for (int i = 0; i < BOARD_SIZE; i++) {
-                                        for (int j = 0; j < BOARD_SIZE; j++) {
-                                            board[i][j] = 0;
-                                        }
-                                    }
-                                    // 清除之前的求解结果
-                                    solutionFound = false;
-                                    solved = false;
-                                    showSolution = false;
                                 }
                             }
                         }  // 关闭 showEditor && clickedInEditor 的if块
-                    } else if (event.mouseButton.button == Mouse::Right) {
+                } else if (event.mouseButton.button == Mouse::Right) 
+            {
                     mouseRightPressed = true;
                     
                     mousePos = Mouse::getPosition(window);  // 更新鼠标位置
@@ -3583,11 +4839,12 @@ int main() {
                     // 确保右键行为正确：只有在鼠标选中并持续按住左键的时候，才能旋转
                     // 检查条件：1. 正在拖拽 2. 左键仍然被按住 3. 在游戏板区域内
                     bool isInBoardArea = false;
-                    int boardX = mousePos.x - offsetX;
-                    int boardY = mousePos.y - offsetY;
-                    int col = boardX / CELL_SIZE;
-                    int row = boardY / CELL_SIZE;
-                    if (row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE) {
+                        int boardX = mousePos.x - offsetX;
+                        int boardY = mousePos.y - offsetY;
+                        int col = boardX / CELL_SIZE;
+                        int row = boardY / CELL_SIZE;
+                    if (row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE) 
+                    {
                         isInBoardArea = true;
                     }
                     
@@ -3596,42 +4853,132 @@ int main() {
                     // 右键只取下图块，不旋转
                     // 检查是否点击在游戏板上，如果是则取下图块
                     // 注意：boardX, boardY, col, row 已经在上面定义过了
-                    if (row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE) {
-                        int cellValue = board[row][col];
-                        if (cellValue != 0) {
+                    if (row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE) 
+                    {
+                        // 如果正在显示解，且用户右键点击了图块，切换到编辑模式
+                        if (showSolution) 
+                        {
+                            // 将solutionBoard复制到board，允许用户编辑
+                            lock_guard<mutex> lock(boardMutex);
+                            for (int i = 0; i < BOARD_SIZE; i++) 
+                            {
+                                for (int j = 0; j < BOARD_SIZE; j++) 
+                                {
+                                    board[i][j] = solutionBoard[i][j];
+                                }
+                            }
+                            showSolution = false;
+                        }
+                        
+                            int cellValue = board[row][col];
+                        if (cellValue != 0) 
+                        {
                                 // 右键取下图块（只移除被点击的那个图块实例）
                                 // 找到对应的图块和形状
+                                // 首先尝试通过tempId找到对应的pieceCounts条目
                                 const Piece* clickedPiece = nullptr;
+                                int clickedPieceId = -1;
                                 int clickedShapeIndex = 0;
                                 int baseRow = -1, baseCol = -1;
                                 
-                                for (size_t i = 0; i < pieces.size(); i++) {
-                                    if (pieces[i].id == cellValue) {
+                                // 首先尝试通过pieceCounts查找
+                                for (const auto& pc : pieceCounts) 
+                                {
+                                    if (pc.tempId == cellValue) 
+                                    {
+                                        clickedPieceId = pc.pieceId;
+                                        break;
+                                    }
+                                }
+                                
+                                // 如果通过pieceCounts找不到，尝试通过形状匹配（处理从预览区拖出的图块）
+                                if (clickedPieceId < 0) 
+                                {
+                                    // 遍历所有图块类型，尝试匹配形状
+                                    for (const auto& p : pieces) 
+                                    {
+                                        for (size_t s = 0; s < p.shapes.size(); s++) 
+                                        {
+                                            const auto& testShape = p.shapes[s];
+                                            // 尝试将当前单元格作为形状的一部分
+                                            for (const auto& cellPos : testShape) 
+                                            {
+                                                int tryBaseRow = row - cellPos.first;
+                                                int tryBaseCol = col - cellPos.second;
+                                                if (tryBaseRow < 0 || tryBaseCol < 0) continue;
+                                                
+                                                // 检查这个基础位置是否匹配整个形状
+                                                bool matches = true;
+                                                int matchedCells = 0;
+                                                for (const auto& checkCell : testShape) 
+                                                {
+                                                    int checkRow = tryBaseRow + checkCell.first;
+                                                    int checkCol = tryBaseCol + checkCell.second;
+                                                    if (checkRow < 0 || checkRow >= BOARD_SIZE ||
+                                                        checkCol < 0 || checkCol >= BOARD_SIZE ||
+                                                        board[checkRow][checkCol] != cellValue) 
+                                                    {
+                                                        matches = false;
+                                                        break;
+                                                    }
+                                                    matchedCells++;
+                                                }
+                                                
+                                                // 确保匹配的单元格数量等于形状大小
+                                                if (matches && matchedCells == (int)testShape.size()) 
+                                                {
+                                                    clickedPieceId = p.id;
+                                                    clickedPiece = &p;
+                                                    clickedShapeIndex = (int)s;
+                                                    baseRow = tryBaseRow;
+                                                    baseCol = tryBaseCol;
+                                                    break;
+                                                }
+                                            }
+                                            if (clickedPieceId >= 0) break;
+                                        }
+                                        if (clickedPieceId >= 0) break;
+                                    }
+                                } else 
+                                {
+                                    // 如果通过pieceCounts找到了pieceId，找到对应的图块类型
+                                    for (size_t i = 0; i < pieces.size(); i++) 
+                                    {
+                                        if (pieces[i].id == clickedPieceId) 
+                                        {
                                         clickedPiece = &pieces[i];
                                         // 找到当前使用的形状，通过尝试不同的基础位置来匹配
-                                        for (size_t s = 0; s < pieces[i].shapes.size(); s++) {
+                                            for (size_t s = 0; s < pieces[i].shapes.size(); s++) 
+                                            {
                                             const auto& shape = pieces[i].shapes[s];
                                             
                                             // 找到形状中哪个cell对应点击位置
-                                            for (const auto& cell : shape) {
+                                                for (const auto& cell : shape) 
+                                                {
                                                 // 尝试这个cell作为点击位置
                                                 int tryBaseRow = row - cell.first;
                                                 int tryBaseCol = col - cell.second;
                                                 
                                                 // 检查这个基础位置是否匹配整个形状
                                                 bool matches = true;
-                                                for (const auto& checkCell : shape) {
+                                                    int matchedCells = 0;
+                                                    for (const auto& checkCell : shape) 
+                                                    {
                                                     int checkRow = tryBaseRow + checkCell.first;
                                                     int checkCol = tryBaseCol + checkCell.second;
                                                     if (checkRow < 0 || checkRow >= BOARD_SIZE ||
                                                         checkCol < 0 || checkCol >= BOARD_SIZE ||
-                                                        board[checkRow][checkCol] != cellValue) {
+                                                            board[checkRow][checkCol] != cellValue) 
+                                                        {
                                                         matches = false;
                                                         break;
                                                     }
+                                                        matchedCells++;
                                                 }
                                                 
-                                                if (matches) {
+                                                    // 确保匹配的单元格数量等于形状大小
+                                                    if (matches && matchedCells == (int)shape.size()) 
+                                                    {
                                                     clickedShapeIndex = s;
                                                     baseRow = tryBaseRow;
                                                     baseCol = tryBaseCol;
@@ -3642,34 +4989,56 @@ int main() {
                                             if (baseRow >= 0) break;
                                         }
                                         break;
+                                        }
                                     }
                                 }
                                 
-                            // 移除被点击的图块实例
-                            if (clickedPiece && baseRow >= 0 && 
-                                clickedShapeIndex >= 0 && clickedShapeIndex < (int)clickedPiece->shapes.size()) {
-                                const auto& shape = clickedPiece->shapes[clickedShapeIndex];
-                                removePiece(shape, baseRow, baseCol);
+                                // 移除被点击的图块实例
+                                if (clickedPiece && baseRow >= 0 && baseCol >= 0 &&
+                                    clickedShapeIndex >= 0 && clickedShapeIndex < (int)clickedPiece->shapes.size()) 
+                                {
+                                    const auto& shape = clickedPiece->shapes[clickedShapeIndex];
+                                    removePiece(shape, baseRow, baseCol);
                             }
                         }
                     }
                 }
             }
             
-            if (event.type == Event::MouseButtonReleased) {
+            if (event.type == Event::MouseButtonReleased) 
+            {
                 mousePos = Mouse::getPosition(window);
                 int offsetX = 50;
                 int offsetY = 50;
                 
-                if (event.mouseButton.button == Mouse::Left) {
+                if (event.mouseButton.button == Mouse::Left) 
+                {
                     mouseLeftPressed = false;
                     
                     // 停止编辑器拖拽
-                    if (editorDrag.isDragging) {
+                    if (editorDrag.isDragging) 
+                    {
                         editorDrag.isDragging = false;
                     }
                     
-                    if (draggedPiece.isDragging) {
+                    if (draggedPiece.isDragging) 
+                    {
+                        // 如果正在显示解，先切换到编辑模式，允许用户放置图块
+                        // 这样用户在求解开始前或求解过程中可以继续操作游戏板
+                        if (showSolution) 
+                        {
+                            // 将solutionBoard复制到board，允许用户编辑
+                            lock_guard<mutex> lock(boardMutex);
+                            for (int i = 0; i < BOARD_SIZE; i++) 
+                            {
+                                for (int j = 0; j < BOARD_SIZE; j++) 
+                                {
+                                    board[i][j] = solutionBoard[i][j];
+                                }
+                            }
+                            showSolution = false;  // 切换到编辑模式
+                        }
+                        
                         // 计算放置位置
                         int boardX = mousePos.x - offsetX;
                         int boardY = mousePos.y - offsetY;
@@ -3678,29 +5047,99 @@ int main() {
                         
                         // 找到对应的图块
                         const Piece* piece = nullptr;
-                        for (const auto& p : pieces) {
-                            if (p.id == draggedPiece.pieceId) {
+                        for (const auto& p : pieces) 
+                        {
+                            if (p.id == draggedPiece.pieceId) 
+                            {
                                 piece = &p;
                                 break;
                             }
                         }
                         
-                        if (piece && draggedPiece.shapeIndex < (int)piece->shapes.size()) {
+                        if (piece && draggedPiece.shapeIndex < (int)piece->shapes.size()) 
+                        {
                             const auto& shape = piece->shapes[draggedPiece.shapeIndex];
+                            
+                            // 计算图块的边界（用于计算基准点）
+                            int minRow = shape[0].first, maxRow = shape[0].first;
+                            int minCol = shape[0].second, maxCol = shape[0].second;
+                            for (const auto& cell : shape) 
+                            {
+                                minRow = min(minRow, cell.first);
+                                maxRow = max(maxRow, cell.first);
+                                minCol = min(minCol, cell.second);
+                                maxCol = max(maxCol, cell.second);
+                            }
+                            
+                            // 从预览区拖出时，需要根据dragOffset计算正确的基准点位置
+                            // dragOffset是鼠标相对于图块实际绘制区域左上角的位置（像素）
+                            // 图块实际绘制区域的左上角在游戏板上的位置 = 鼠标位置 - offset - dragOffset
+                            // 基准点位置 = (图块实际绘制区域左上角位置) / CELL_SIZE - (minCol, minRow)
+                            int baseRow = row, baseCol = col;
+                            if (draggedPiece.originalRow < 0 && draggedPiece.originalCol < 0) 
+                            {
+                                // 从预览区拖出：根据dragOffset计算基准点
+                                // dragOffset是鼠标相对于图块实际绘制区域左上角的位置（像素）
+                                // 在预览区中，图块使用动态cellSize，在游戏板中使用固定CELL_SIZE
+                                // 需要将dragOffset从预览区坐标系转换为游戏板坐标系
+                                
+                                // 重新计算预览区的cellSize（与点击时相同）
+                                int maxDim = 0;
+                                for (const auto& cell : shape) 
+                                {
+                                    maxDim = max(maxDim, max(cell.first, cell.second));
+                                }
+                                // 预览区的itemSize（与点击时相同）
+                                int previewWidth = BOARD_SIZE * CELL_SIZE;
+                                int itemsPerRow = 8;
+                                int itemSize = (previewWidth - 40) / itemsPerRow - 10;
+                                int previewCellSize = maxDim > 0 ? itemSize / (maxDim + 1) : itemSize / 3;
+                                
+                                // 将dragOffset从预览区坐标系转换为游戏板坐标系
+                                // dragOffset是像素偏移，需要按比例缩放
+                                if (previewCellSize > 0) 
+                                {
+                                    float scale = (float)CELL_SIZE / (float)previewCellSize;
+                                    int scaledDragOffsetX = (int)(draggedPiece.dragOffset.x * scale);
+                                    int scaledDragOffsetY = (int)(draggedPiece.dragOffset.y * scale);
+                                    
+                                    // 计算图块实际绘制区域的左上角在游戏板上的位置（像素）
+                                    int shapeTopLeftX = boardX - scaledDragOffsetX;
+                                    int shapeTopLeftY = boardY - scaledDragOffsetY;
+                                    // 转换为单元格坐标
+                                    int shapeTopLeftCol = shapeTopLeftX / CELL_SIZE;
+                                    int shapeTopLeftRow = shapeTopLeftY / CELL_SIZE;
+                                    // 基准点 = 图块实际绘制区域左上角 - (minCol, minRow)
+                                    baseCol = shapeTopLeftCol - minCol;
+                                    baseRow = shapeTopLeftRow - minRow;
+                                } else 
+                                {
+                                    // 如果无法计算cellSize，使用简单的方法：直接使用鼠标位置
+                                    baseCol = col - minCol;
+                                    baseRow = row - minRow;
+                                }
+                            }
                             
                             // 检查是否可以放置
                             bool canPlaceHere = false;
-                            if (row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE) {
-                                if (draggedPiece.originalRow >= 0 && draggedPiece.originalCol >= 0) {
+                            // 首先检查鼠标是否在游戏板区域内
+                            bool mouseInBoard = (row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE);
+                            
+                            if (mouseInBoard && baseRow >= 0 && baseRow < BOARD_SIZE && baseCol >= 0 && baseCol < BOARD_SIZE) 
+                            {
+                                if (draggedPiece.originalRow >= 0 && draggedPiece.originalCol >= 0) 
+                                {
                                     // 从游戏板上拖拽：需要检查目标位置，但忽略原始位置
                                     // 重要：只检查形状中实际定义的单元格，不检查边界框内的"透明"区域
                                     canPlaceHere = true;
-                                    for (const auto& cell : shape) {
-                                        int newRow = row + cell.first;
-                                        int newCol = col + cell.second;
+                                    for (const auto& cell : shape) 
+                                    {
+                                        int newRow = baseRow + cell.first;
+                                        int newCol = baseCol + cell.second;
                                         
                                         if (newRow < 0 || newRow >= BOARD_SIZE || 
-                                            newCol < 0 || newCol >= BOARD_SIZE) {
+                                            newCol < 0 || newCol >= BOARD_SIZE) 
+                                        {
                                             canPlaceHere = false;
                                             break;
                                         }
@@ -3708,10 +5147,12 @@ int main() {
                                         // 检查这个位置是否在原始图块的范围内（允许放回原位置）
                                         // 只检查原始图块实际占据的单元格，不检查边界框
                                         bool isInOriginal = false;
-                                        for (const auto& origCell : shape) {
+                                        for (const auto& origCell : shape) 
+                                        {
                                             int origRow = draggedPiece.originalRow + origCell.first;
                                             int origCol = draggedPiece.originalCol + origCell.second;
-                                            if (newRow == origRow && newCol == origCol) {
+                                            if (newRow == origRow && newCol == origCol) 
+                                            {
                                                 isInOriginal = true;
                                                 break;
                                             }
@@ -3719,28 +5160,69 @@ int main() {
                                         
                                         // 如果不在原始位置范围内，且被其他图块占据，则不能放置
                                         // 注意：只检查形状中定义的单元格，边界框内的"透明"区域应该被视为空白
-                                        if (!isInOriginal && board[newRow][newCol] != 0) {
+                                        if (!isInOriginal && board[newRow][newCol] != 0) 
+                                        {
                                             canPlaceHere = false;
                                             break;
                                         }
                                     }
-                                } else {
+                                } else 
+                                {
                                     // 从预览区拖出：正常检查（只检查形状中定义的单元格）
-                                    // 问题3修复：确保从预览区拖出时能正确放置
-                                    canPlaceHere = canPlace(shape, row, col);
+                                    canPlaceHere = canPlace(shape, baseRow, baseCol);
                                 }
                             }
                             
-                            if (canPlaceHere) {
-                                // 放置图块
-                                placePiece(shape, row, col, draggedPiece.pieceId);
+                            if (canPlaceHere) 
+                            {
+                                // 放置图块（使用tempId和正确的基准点位置）
+                                placePiece(shape, baseRow, baseCol, draggedPiece.tempId);
+                                
+                                // 重要：从预览区拖出的图块，tempId是新分配的，需要更新到pieceCounts中
+                                // 这样绘制时才能正确识别图块
+                                // 找到对应的pieceCounts条目，更新tempId（如果还没有设置）
+                                if (draggedPiece.originalRow < 0 && draggedPiece.originalCol < 0) 
+                                {
+                                    // 从预览区拖出：需要更新pieceCounts中的tempId
+                                    for (auto& pc : pieceCounts) 
+                                    {
+                                        if (pc.pieceId == draggedPiece.pieceId) 
+                                        {
+                                            // 如果pieceCounts中的tempId还没有被使用（board上没有这个tempId），
+                                            // 或者这个tempId就是当前放置的tempId，则更新
+                                            bool tempIdInUse = false;
+                                            for (int i = 0; i < BOARD_SIZE; i++) 
+                                            {
+                                                for (int j = 0; j < BOARD_SIZE; j++) 
+                                                {
+                                                    if (board[i][j] == pc.tempId && pc.tempId != draggedPiece.tempId) 
+                                                    {
+                                                        tempIdInUse = true;
+                                                        break;
+                                                    }
+                                                }
+                                                if (tempIdInUse) break;
+                                            }
+                                            
+                                            // 如果tempId没有被使用，或者就是当前放置的tempId，则更新
+                                            if (!tempIdInUse || pc.tempId == draggedPiece.tempId) 
+                                            {
+                                                pc.tempId = draggedPiece.tempId;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                
                                 // 图块放置后，强制重新渲染预览区（通过重新计算已使用数量）
                                 // calculateUsedPieceCounts()会在下一帧自动重新计算，预览区会更新
-                            } else {
+                            } else 
+                            {
                                 // 无法放置，恢复到原位置（如果有）
-                                if (draggedPiece.originalRow >= 0 && draggedPiece.originalCol >= 0) {
+                                if (draggedPiece.originalRow >= 0 && draggedPiece.originalCol >= 0) 
+                                {
                                     placePiece(shape, draggedPiece.originalRow, 
-                                             draggedPiece.originalCol, draggedPiece.pieceId);
+                                             draggedPiece.originalCol, draggedPiece.tempId);
                                     // 恢复到原位置后，预览区不需要更新（数量没变）
                                 }
                                 // 如果从预览区拖出，无法放置时不恢复（图块回到预览区）
@@ -3751,18 +5233,57 @@ int main() {
                         // 重置拖拽状态
                         draggedPiece.isDragging = false;
                         draggedPiece.pieceId = -1;
+                        draggedPiece.tempId = -1;
                     }
-                } else if (event.mouseButton.button == Mouse::Right) {
+                    }
+                } else if (event.mouseButton.button == Mouse::Right) 
+                {
                     mouseRightPressed = false;
                     isRotating = false;
+                    
+                    // 如果正在拖拽图块，右键取消拖拽，让图块回到预览区或原位置
+                    if (draggedPiece.isDragging) 
+                    {
+                        // 找到对应的图块
+                        const Piece* piece = nullptr;
+                        for (const auto& p : pieces) 
+                        {
+                            if (p.id == draggedPiece.pieceId) 
+                            {
+                                piece = &p;
+                                break;
+                            }
+                        }
+                        
+                        if (piece && draggedPiece.shapeIndex < (int)piece->shapes.size()) 
+                        {
+                            const auto& shape = piece->shapes[draggedPiece.shapeIndex];
+                            
+                            // 如果从游戏板上拖拽，恢复到原位置
+                            if (draggedPiece.originalRow >= 0 && draggedPiece.originalCol >= 0) 
+                            {
+                                placePiece(shape, draggedPiece.originalRow, 
+                                         draggedPiece.originalCol, draggedPiece.tempId);
+                            }
+                            // 如果从预览区拖出，不恢复（图块回到预览区）
+                            // 此时预览区会通过calculateUsedPieceCounts()自动更新
+                        }
+                        
+                        // 重置拖拽状态
+                        draggedPiece.isDragging = false;
+                        draggedPiece.pieceId = -1;
+                        draggedPiece.tempId = -1;
+                    }
                 }
             }
             
-            if (event.type == Event::MouseMoved) {
+            if (event.type == Event::MouseMoved) 
+            {
                 mousePos = Mouse::getPosition(window);
                 
                 // 处理编辑器拖拽
-                if (editorDrag.isDragging) {
+                if (editorDrag.isDragging) 
+                {
                     editorDrag.editorX = mousePos.x - editorDrag.dragOffset.x;
                     editorDrag.editorY = mousePos.y - editorDrag.dragOffset.y;
                     // 限制在窗口内

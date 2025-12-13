@@ -23,7 +23,7 @@
 #
 # Available piece names:
 #   3x3, 3x3L, 2x4, 2x3, L-shape, L-mirror, Z-mirror, line4, cross, T-shape,
-#   line3, 1x1-1, 1x1-2, line2, Z-shape, L3，line5，
+#   line3, 1x1-1, 1x1-2, line2, Z-shape, L3
 3x3=resources/sexy/3x3.png
 3x3L=resources/sexy/3x3L.png
 2x4=resources/sexy/2x4.png
@@ -39,7 +39,7 @@ line3=resources/sexy/Line3.png
 line2=resources/sexy/Line2.png
 Z-shape=resources/sexy/Z-shape.png
 L3=resources/sexy/Small-L.png
-line5=resources/sexy/line5.png
 Big_c=resources/sexy/Big_c.png
+line5=resources/sexy/line5.png
 # 2x2.png
 
