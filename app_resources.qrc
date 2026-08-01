@@ -1,0 +1,8 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/">
+        <file>resources/hola.ico</file>
+        <file>resources/brush.png</file>
+        <file>resources/bottle.png</file>
+    </qresource>
+</RCC>
